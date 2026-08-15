@@ -1,4 +1,4 @@
-import { SELF, env, evictDurableObject } from "cloudflare:test";
+import { SELF, env, evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type {
@@ -155,6 +155,40 @@ describe("PeerLink signaling Worker", () => {
     const forwardedCandidate = nextMessage(second);
     first.send(JSON.stringify(candidate));
     expect(await forwardedCandidate).toEqual(candidate);
+  });
+
+  it("allows a disconnected peer to rejoin during the grace period", async () => {
+    const { roomId } = await createRoom();
+    const first = await connect(roomId);
+    await nextMessage(first);
+    const firstSawJoin = nextMessage(first);
+    const second = await connect(roomId);
+    await nextMessage(second);
+    await firstSawJoin;
+
+    const firstSawLeave = nextMessage(first);
+    second.close(1000, "Network changed");
+    expect(await firstSawLeave).toEqual({ type: "peer-left" });
+
+    const firstSawRejoin = nextMessage(first);
+    const replacement = await connect(roomId);
+    expect(await nextMessage(replacement)).toEqual({
+      type: "room-joined",
+      role: "responder",
+      peerCount: 2,
+    });
+    expect(await firstSawRejoin).toEqual({ type: "peer-joined" });
+  });
+
+  it("expires an empty room when its lifecycle alarm runs", async () => {
+    const { roomId } = await createRoom();
+    expect(await runDurableObjectAlarm(env.ROOMS.getByName(roomId))).toBe(true);
+
+    const response = await SELF.fetch(roomSocketUrl(roomId), {
+      headers: { Upgrade: "websocket", Origin: appOrigin },
+    });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({ error: "Room expired", code: "room-expired" });
   });
 });
 

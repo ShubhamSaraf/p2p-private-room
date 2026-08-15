@@ -31,7 +31,9 @@
     "check:phase6.5": "npm run check && npm run test:e2e",
     "check:phase7": "npm run check && npm run test:e2e",
     "check:phase8": "npm run check && npm run test:e2e",
-    "check:phase9": "npm run check && npm run test:e2e"
+    "check:phase9": "npm run check && npm run test:e2e",
+    "check:phase10": "npm run check && npm run test:e2e",
+    "check:phase11": "npm run check && npm run test:e2e"
   },
   "engines": {
     "node": ">=22.13"

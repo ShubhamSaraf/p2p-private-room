@@ -6,12 +6,19 @@ import {
 } from "@peerlink/protocol";
 import { SHARED_SECRET_MAX_LENGTH, SHARED_SECRET_MIN_LENGTH } from "@peerlink/crypto";
 import { isProbablyCompressed } from "@peerlink/transfer";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ChatEntry, TransferEntry } from "./webrtc/PeerRoomSession";
 
 import { createRoom, getRoomIdFromPath } from "./api";
 import { SIGNALING_URL } from "./config";
+import {
+  clearLocalHistory,
+  getLocalHistoryEnabled,
+  loadRoomMessages,
+  saveRoomMessages,
+  setLocalHistoryEnabled,
+} from "./localHistory";
 import { usePeerRoom } from "./webrtc/usePeerRoom";
 
 type HealthState = "checking" | "connected" | "unavailable";
@@ -103,8 +110,8 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
         </div>
 
         <aside className="glass-card rounded-3xl p-6 sm:p-8" aria-label="Service status">
-          <p className="text-sm font-medium text-slate-400">Phase 9 status</p>
-          <h2 className="mt-2 text-2xl font-semibold">Private paths, visible status</h2>
+          <p className="text-sm font-medium text-slate-400">Phase 11 status</p>
+          <h2 className="mt-2 text-2xl font-semibold">Resilient, private rooms</h2>
           <dl className="mt-8 space-y-5 text-sm">
             <StatusRow label="Signaling service" value={healthLabel(health)} state={health} />
             <StatusRow label="Room capacity" value="Two peers" />
@@ -128,6 +135,8 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
   const [secretError, setSecretError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [transferError, setTransferError] = useState<string | null>(null);
+  const [historyEnabled, setHistoryEnabled] = useState(false);
+  const [savedMessages, setSavedMessages] = useState<ChatEntry[]>([]);
   const [pendingFile, setPendingFile] = useState<{
     file: File;
     category: "image" | "file";
@@ -138,6 +147,46 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
   const filePickerRef = useRef<HTMLInputElement>(null);
   const compressionWorkerRef = useRef<Worker | null>(null);
   const inviteUrl = `${window.location.origin}/r/${roomId}`;
+  const visibleMessages = useMemo(() => {
+    if (!historyEnabled) return state.messages;
+    const messages = new Map(savedMessages.map((message) => [message.id, message]));
+    for (const message of state.messages) messages.set(message.id, message);
+    return [...messages.values()].sort((left, right) => left.timestamp - right.timestamp);
+  }, [historyEnabled, savedMessages, state.messages]);
+
+  useEffect(() => {
+    let active = true;
+    void getLocalHistoryEnabled().then(async (enabled) => {
+      if (!active) return;
+      setHistoryEnabled(enabled);
+      if (enabled) setSavedMessages(await loadRoomMessages(roomId));
+    });
+    return () => {
+      active = false;
+    };
+  }, [roomId]);
+
+  useEffect(() => {
+    if (historyEnabled && state.messages.length > 0) {
+      void saveRoomMessages(roomId, state.messages);
+    }
+  }, [historyEnabled, roomId, state.messages]);
+
+  async function toggleLocalHistory(enabled: boolean) {
+    setHistoryEnabled(enabled);
+    await setLocalHistoryEnabled(enabled);
+    if (enabled) {
+      await saveRoomMessages(roomId, state.messages);
+      setSavedMessages(await loadRoomMessages(roomId));
+    } else {
+      setSavedMessages([]);
+    }
+  }
+
+  async function clearSavedHistory() {
+    await clearLocalHistory();
+    setSavedMessages([]);
+  }
 
   async function copyInvite() {
     try {
@@ -554,11 +603,31 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
           </section>
 
           <section className="glass-card overflow-hidden rounded-3xl" aria-label="Direct chat">
-            <div className="border-b border-white/10 px-6 py-5 sm:px-8">
-              <p className="text-sm font-medium text-slate-400">Direct chat</p>
-              <h2 className="mt-1 text-xl font-semibold">
-                Messages are encrypted before WebRTC sends them
-              </h2>
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-6 py-5 sm:px-8">
+              <div>
+                <p className="text-sm font-medium text-slate-400">Direct chat</p>
+                <h2 className="mt-1 text-xl font-semibold">
+                  Messages are encrypted before WebRTC sends them
+                </h2>
+              </div>
+              <div className="flex items-center gap-4 text-sm">
+                <label className="flex cursor-pointer items-center gap-2 text-slate-300">
+                  <input
+                    checked={historyEnabled}
+                    className="size-4 accent-cyan-300"
+                    onChange={(event) => void toggleLocalHistory(event.target.checked)}
+                    type="checkbox"
+                  />
+                  Save chats locally
+                </label>
+                <button
+                  className="text-slate-400 underline underline-offset-4 disabled:opacity-40"
+                  onClick={() => void clearSavedHistory()}
+                  type="button"
+                >
+                  Clear local history
+                </button>
+              </div>
             </div>
 
             <ol
@@ -566,14 +635,14 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
               aria-live="polite"
               className="flex min-h-64 max-h-[28rem] flex-col gap-4 overflow-y-auto px-6 py-6 sm:px-8"
             >
-              {state.messages.length === 0 ? (
+              {visibleMessages.length === 0 ? (
                 <li className="m-auto max-w-md text-center text-sm leading-6 text-slate-400">
                   {state.authentication === "verified"
                     ? "You are verified. Send the first message."
                     : "Chat unlocks when the control DataChannel opens."}
                 </li>
               ) : (
-                state.messages.map((message) => <ChatBubble key={message.id} message={message} />)
+                visibleMessages.map((message) => <ChatBubble key={message.id} message={message} />)
               )}
             </ol>
 
@@ -633,7 +702,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
             {PRODUCT_NAME}
           </a>
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-            Phase 9
+            Phase 11
           </span>
         </header>
         {children}
@@ -875,6 +944,7 @@ function isHealthy(value: unknown): value is ServiceHealth {
 
 function roomStatusTitle(phase: string): string {
   if (phase === "connected") return "Connected";
+  if (phase === "reconnecting") return "Reconnecting…";
   if (phase === "waiting") return "Waiting for your peer";
   if (phase === "negotiating") return "Connecting peer…";
   if (phase === "error") return "Connection failed";
@@ -884,6 +954,8 @@ function roomStatusTitle(phase: string): string {
 
 function roomStatusDescription(phase: string): string {
   if (phase === "connected") return "Peer connected and the control DataChannel is open.";
+  if (phase === "reconnecting")
+    return "The network changed. PeerLink is rebuilding signaling and will require verification again.";
   if (phase === "waiting")
     return "Share the invite link with one other person and keep this page open.";
   if (phase === "negotiating") return "Exchanging connection details through the signaling Worker.";

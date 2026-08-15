@@ -63,6 +63,7 @@ async function routeRequest(request: Request, env: WorkerEnv): Promise<Response>
     }
 
     const roomId = createRoomId();
+    await env.ROOMS.getByName(roomId).initialize(Date.now());
     const room: RoomCreated = { roomId, roomPath: `/r/${roomId}` };
     return json(room, 201, corsHeaders);
   }

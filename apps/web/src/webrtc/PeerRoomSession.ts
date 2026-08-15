@@ -44,7 +44,7 @@ import {
 const MAX_VISIBLE_CHAT_MESSAGES = 500;
 
 export type RoomPhase =
-  "signaling" | "waiting" | "negotiating" | "connected" | "disconnected" | "error";
+  "signaling" | "waiting" | "negotiating" | "connected" | "reconnecting" | "disconnected" | "error";
 
 export type AuthenticationPhase =
   "waiting-for-peer" | "required" | "authenticating" | "verified" | "failed";
@@ -143,6 +143,10 @@ export class PeerRoomSession {
   private readonly objectUrls = new Set<string>();
   private authSessionId: string | null = null;
   private disposed = false;
+  private reconnectTimer: number | null = null;
+  private reconnectAttempt = 0;
+  private reconnectDeadline = 0;
+  private hasOpenedSocket = false;
 
   constructor(options: SessionOptions) {
     this.roomId = options.roomId;
@@ -179,11 +183,20 @@ export class PeerRoomSession {
     }
     if (this.disposed) return;
 
+    this.openSocket();
+  }
+
+  private openSocket(): void {
+    if (this.disposed) return;
     const socket = new WebSocket(createSocketUrl(this.signalingUrl, this.roomId));
     this.socket = socket;
 
     socket.addEventListener("open", () => {
-      if (!this.disposed) this.update({ phase: "waiting" });
+      if (this.disposed) return;
+      this.hasOpenedSocket = true;
+      this.reconnectAttempt = 0;
+      this.reconnectDeadline = 0;
+      this.update({ phase: "waiting", error: null });
     });
     socket.addEventListener("message", (event) => {
       if (this.disposed) return;
@@ -192,18 +205,47 @@ export class PeerRoomSession {
         .catch((error: unknown) => this.fail(error));
     });
     socket.addEventListener("error", () => {
-      if (!this.disposed) this.fail(new Error("Unable to connect. The room may be full."));
-    });
-    socket.addEventListener("close", () => {
-      if (!this.disposed && this.state.phase !== "error") {
-        this.resetPeerConnection();
-        this.update({ phase: "disconnected" });
+      if (this.disposed) return;
+      if (!this.hasOpenedSocket) {
+        this.fail(new Error("Unable to connect. The room may be full or expired."));
+      } else if (socket.readyState < WebSocket.CLOSING) {
+        socket.close(1012, "Signaling connection interrupted");
       }
     });
+    socket.addEventListener("close", () => {
+      if (this.socket === socket) this.socket = null;
+      if (this.disposed || !this.hasOpenedSocket) return;
+      this.role = null;
+      this.resetPeerConnection();
+      this.update({
+        role: null,
+        phase: "reconnecting",
+        error: "Connection interrupted. Reconnecting for up to five minutes.",
+      });
+      this.scheduleReconnect();
+    });
+  }
+
+  private scheduleReconnect(): void {
+    if (this.disposed || this.reconnectTimer !== null) return;
+    const now = Date.now();
+    if (this.reconnectDeadline === 0) this.reconnectDeadline = now + 5 * 60 * 1_000;
+    if (now >= this.reconnectDeadline) {
+      this.update({ phase: "disconnected", error: "The five-minute reconnect window expired." });
+      return;
+    }
+    const delay = Math.min(1_000 * 2 ** this.reconnectAttempt, 15_000);
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.openSocket();
+    }, delay);
   }
 
   disconnect(): void {
     this.disposed = true;
+    if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.resetPeerConnection();
     if (this.socket && this.socket.readyState < WebSocket.CLOSING) {
       this.socket.close(1000, "Page closed");

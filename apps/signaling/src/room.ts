@@ -7,6 +7,8 @@ import {
 import { DurableObject } from "cloudflare:workers";
 
 const MAX_SIGNAL_FRAME_BYTES = 128 * 1024;
+export const ROOM_RECONNECT_GRACE_MS = 5 * 60 * 1_000;
+export const ROOM_MAX_LIFETIME_MS = 24 * 60 * 60 * 1_000;
 
 type SocketAttachment = {
   peerId: string;
@@ -14,9 +16,39 @@ type SocketAttachment = {
 };
 
 export class Room extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    void ctx.blockConcurrencyWhile(() => Promise.resolve(this.migrate()));
+  }
+
+  async initialize(createdAt: number): Promise<void> {
+    if (!Number.isSafeInteger(createdAt) || createdAt <= 0)
+      throw new Error("Invalid creation time");
+    this.ctx.storage.sql.exec(
+      "INSERT OR IGNORE INTO room_lifecycle (singleton, created_at, expired) VALUES (1, ?, 0)",
+      createdAt,
+    );
+    const lifecycle = this.getLifecycle();
+    if (lifecycle && lifecycle.expired === 0) {
+      await this.ctx.storage.setAlarm(lifecycle.created_at + ROOM_MAX_LIFETIME_MS);
+    }
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return Response.json({ error: "Expected a WebSocket upgrade" }, { status: 426 });
+    }
+
+    const now = Date.now();
+    if (!this.getLifecycle()) await this.initialize(now);
+    const lifecycle = this.getLifecycle();
+    if (
+      !lifecycle ||
+      lifecycle.expired === 1 ||
+      now >= lifecycle.created_at + ROOM_MAX_LIFETIME_MS
+    ) {
+      this.expireRoom();
+      return Response.json({ error: "Room expired", code: "room-expired" }, { status: 410 });
     }
 
     const existingSockets = this.getOpenSockets();
@@ -32,6 +64,7 @@ export class Room extends DurableObject<Env> {
 
     server.serializeAttachment({ peerId: crypto.randomUUID(), role } satisfies SocketAttachment);
     this.ctx.acceptWebSocket(server, [role]);
+    await this.scheduleLifecycleAlarm(true, now);
 
     send(server, {
       type: "room-joined",
@@ -91,12 +124,13 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  webSocketClose(socket: WebSocket, code: number, reason: string): void {
+  async webSocketClose(socket: WebSocket, code: number, reason: string): Promise<void> {
     socket.close(code, reason);
     this.notifyRemainingPeer();
+    await this.scheduleLifecycleAlarm(this.getOpenSockets().length > 0);
   }
 
-  webSocketError(socket: WebSocket, error: unknown): void {
+  async webSocketError(socket: WebSocket, error: unknown): Promise<void> {
     console.error(
       JSON.stringify({
         event: "room-websocket-error",
@@ -105,6 +139,18 @@ export class Room extends DurableObject<Env> {
     );
     socket.close(1011, "WebSocket error");
     this.notifyRemainingPeer();
+    await this.scheduleLifecycleAlarm(this.getOpenSockets().length > 0);
+  }
+
+  async alarm(): Promise<void> {
+    const lifecycle = this.getLifecycle();
+    if (!lifecycle || lifecycle.expired === 1) return;
+    const now = Date.now();
+    if (now >= lifecycle.created_at + ROOM_MAX_LIFETIME_MS || this.getOpenSockets().length === 0) {
+      this.expireRoom();
+      return;
+    }
+    await this.scheduleLifecycleAlarm(true, now);
   }
 
   private getOpenSockets(): WebSocket[] {
@@ -115,6 +161,39 @@ export class Room extends DurableObject<Env> {
     for (const peer of this.getOpenSockets()) {
       send(peer, { type: "peer-left" });
     }
+  }
+
+  private migrate(): void {
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS room_lifecycle (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        created_at INTEGER NOT NULL,
+        expired INTEGER NOT NULL DEFAULT 0 CHECK (expired IN (0, 1))
+      )
+    `);
+  }
+
+  private getLifecycle(): { created_at: number; expired: number } | null {
+    return (
+      this.ctx.storage.sql
+        .exec<{ created_at: number; expired: number }>(
+          "SELECT created_at, expired FROM room_lifecycle WHERE singleton = 1",
+        )
+        .toArray()[0] ?? null
+    );
+  }
+
+  private async scheduleLifecycleAlarm(hasConnectedPeer: boolean, now = Date.now()): Promise<void> {
+    const lifecycle = this.getLifecycle();
+    if (!lifecycle || lifecycle.expired === 1) return;
+    const maximum = lifecycle.created_at + ROOM_MAX_LIFETIME_MS;
+    const next = hasConnectedPeer ? maximum : Math.min(maximum, now + ROOM_RECONNECT_GRACE_MS);
+    await this.ctx.storage.setAlarm(next);
+  }
+
+  private expireRoom(): void {
+    this.ctx.storage.sql.exec("UPDATE room_lifecycle SET expired = 1 WHERE singleton = 1");
+    for (const socket of this.getOpenSockets()) socket.close(1000, "Room expired");
   }
 }
 
