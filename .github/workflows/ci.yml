@@ -32,8 +32,10 @@ jobs:
         run: npm run test --workspace @peerlink/crypto
       - name: Test transfer
         run: npm run test --workspace @peerlink/transfer
-      - name: Test web
-        run: npm run test --workspace @peerlink/web
+      - name: Test web history
+        run: npm exec --workspace @peerlink/web -- vitest run src/localHistory.test.ts --reporter=default --reporter=github-actions
+      - name: Test web application
+        run: npm exec --workspace @peerlink/web -- vitest run src/App.test.tsx --reporter=default --reporter=github-actions
       - name: Test signaling
         run: npm run test --workspace @peerlink/signaling
       - name: Build workspaces
