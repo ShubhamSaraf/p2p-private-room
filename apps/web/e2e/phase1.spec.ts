@@ -155,6 +155,35 @@ test("publishes a local installable app shell", async ({ page }) => {
   expect(serviceWorker).toContain("peerlink-shell-v1");
 });
 
+test("room controls stay within a mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect(page.getByText("Signaling service").locator("..")).toContainText("Connected");
+  await page.getByRole("button", { name: "Create private room" }).click();
+  await expect(page.getByRole("heading", { name: "Waiting for your peer" })).toBeVisible();
+
+  const invitePanel = page.getByText("Invite link", { exact: true }).locator("..");
+  const connectionPanel = page.getByLabel("Connection status");
+  const inviteUrl = invitePanel.locator("p").nth(1);
+
+  await expect(inviteUrl).toHaveCSS("word-break", "break-all");
+  await expect(invitePanel).toBeInViewport();
+  await expect(connectionPanel).toBeInViewport();
+
+  const widths = await page.evaluate(() => ({
+    document: document.documentElement.scrollWidth,
+    viewport: window.innerWidth,
+  }));
+  expect(widths.document).toBeLessThanOrEqual(widths.viewport);
+
+  for (const panel of [invitePanel, connectionPanel]) {
+    const bounds = await panel.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(widths.viewport);
+  }
+});
+
 test("different shared secrets keep direct chat locked", async ({ context, page }) => {
   await page.goto("/");
   await expect(page.getByText("Signaling service").locator("..")).toContainText("Connected");

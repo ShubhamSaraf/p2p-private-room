@@ -388,10 +388,10 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
 
   return (
     <PageShell>
-      <div className="flex flex-1 py-12">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
-          <div className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-            <section className="glass-card rounded-3xl p-7 sm:p-10">
+      <div className="flex min-w-0 flex-1 py-12">
+        <div className="mx-auto flex min-w-0 w-full max-w-5xl flex-col gap-8">
+          <div className="grid min-w-0 gap-8 lg:grid-cols-[1.15fr_0.85fr]">
+            <section className="glass-card min-w-0 rounded-3xl p-7 sm:p-10">
               <p className="text-sm font-medium uppercase tracking-[0.24em] text-cyan-300">
                 Private room
               </p>
@@ -400,11 +400,13 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
               </h1>
               <p className="mt-4 leading-7 text-slate-300">{roomStatusDescription(state.phase)}</p>
 
-              <div className="mt-8 rounded-2xl border border-white/10 bg-slate-950/50 p-4">
+              <div className="mt-8 min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/50 p-4">
                 <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
                   Invite link
                 </p>
-                <p className="mt-2 truncate font-mono text-sm text-slate-200">{inviteUrl}</p>
+                <p className="mt-2 break-all font-mono text-sm leading-6 text-slate-200">
+                  {inviteUrl}
+                </p>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <button
                     className="min-h-11 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-sm font-medium text-cyan-200 hover:bg-cyan-300/15"
@@ -451,7 +453,7 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
               ) : null}
             </section>
 
-            <aside className="glass-card rounded-3xl p-7" aria-label="Connection status">
+            <aside className="glass-card min-w-0 rounded-3xl p-7" aria-label="Connection status">
               <p className="text-sm font-medium text-slate-400">Connection status</p>
               <dl className="mt-7 space-y-5 text-sm">
                 <ConnectionRow
@@ -505,20 +507,22 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                 />
                 <ConnectionRow label="Server content storage" connected value="None" />
               </dl>
-              <button
-                className="mt-8 text-sm text-slate-400 underline underline-offset-4 hover:text-slate-200"
-                onClick={onLeave}
-                type="button"
-              >
-                Leave room
-              </button>
-              <button
-                className="ml-5 mt-8 text-sm text-slate-400 underline underline-offset-4 hover:text-slate-200"
-                onClick={() => void copyBetaDiagnostics()}
-                type="button"
-              >
-                {diagnosticsCopied ? "Diagnostics copied" : "Copy beta diagnostics"}
-              </button>
+              <div className="mt-8 flex flex-wrap gap-x-5 gap-y-3">
+                <button
+                  className="text-sm text-slate-400 underline underline-offset-4 hover:text-slate-200"
+                  onClick={onLeave}
+                  type="button"
+                >
+                  Leave room
+                </button>
+                <button
+                  className="text-sm text-slate-400 underline underline-offset-4 hover:text-slate-200"
+                  onClick={() => void copyBetaDiagnostics()}
+                  type="button"
+                >
+                  {diagnosticsCopied ? "Diagnostics copied" : "Copy beta diagnostics"}
+                </button>
+              </div>
             </aside>
           </div>
 
@@ -946,7 +950,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
     <main className="min-h-screen overflow-hidden bg-slate-950 text-slate-100">
       <div className="ambient ambient-one" aria-hidden="true" />
       <div className="ambient ambient-two" aria-hidden="true" />
-      <section className="relative mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-8 sm:px-10 lg:px-16">
+      <section className="relative mx-auto flex min-h-screen w-full min-w-0 max-w-6xl flex-col px-6 py-8 sm:px-10 lg:px-16">
         <header className="flex items-center justify-between">
           <a className="flex items-center gap-3 font-semibold tracking-tight" href="/">
             <span className="grid size-9 place-items-center rounded-xl border border-cyan-300/25 bg-cyan-300/10 text-cyan-200">
@@ -1209,9 +1213,9 @@ function ConnectionRow({
   connected: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-white/8 pb-5 last:border-0 last:pb-0">
+    <div className="flex min-w-0 flex-col gap-2 border-b border-white/8 pb-5 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <dt className="text-slate-400">{label}</dt>
-      <dd className="flex items-center gap-2 text-right font-medium">
+      <dd className="flex min-w-0 items-center gap-2 break-words font-medium sm:max-w-[60%] sm:justify-end sm:text-right">
         <StatusDot active={connected} />
         {value}
       </dd>
