@@ -110,8 +110,8 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
         </div>
 
         <aside className="glass-card rounded-3xl p-6 sm:p-8" aria-label="Service status">
-          <p className="text-sm font-medium text-slate-400">Phase 16 status</p>
-          <h2 className="mt-2 text-2xl font-semibold">Installable, resilient sharing</h2>
+          <p className="text-sm font-medium text-slate-400">Phase 20 beta status</p>
+          <h2 className="mt-2 text-2xl font-semibold">Private-room beta ready</h2>
           <dl className="mt-8 space-y-5 text-sm">
             <StatusRow label="Signaling service" value={healthLabel(health)} state={health} />
             <StatusRow label="Room capacity" value="Two peers" />
@@ -130,6 +130,7 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
 function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) {
   const state = usePeerRoom(roomId);
   const [copied, setCopied] = useState(false);
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [secret, setSecret] = useState("");
@@ -249,6 +250,44 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
     }
+  }
+
+  async function copyBetaDiagnostics() {
+    const completedTransfers = state.transfers.filter(
+      (transfer) => transfer.status === "completed" && transfer.integrity === "verified",
+    );
+    const failedTransfers = state.transfers.filter((transfer) => transfer.status === "failed");
+    const report = {
+      schema: "peerlink-beta-diagnostics/v1",
+      generatedAt: new Date().toISOString(),
+      connection: {
+        phase: state.phase,
+        path: state.connectionPath,
+        turnAvailable: state.turnAvailability === "available",
+        peerConnection: state.peerConnection,
+        dataChannel: state.dataChannel,
+        authentication: state.authentication,
+        connectTimeMs:
+          state.connectedAt === null ? null : state.connectedAt - state.connectionStartedAt,
+      },
+      transfers: {
+        total: state.transfers.length,
+        verified: completedTransfers.length,
+        failed: failedTransfers.length,
+        verifiedBytes: completedTransfers.reduce((total, transfer) => total + transfer.size, 0),
+      },
+      platform: {
+        language: navigator.language,
+        mobile:
+          typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches,
+        standalone:
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(display-mode: standalone)").matches,
+      },
+    };
+    await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+    setDiagnosticsCopied(true);
+    window.setTimeout(() => setDiagnosticsCopied(false), 2_000);
   }
 
   function sendMessage(event: FormEvent<HTMLFormElement>) {
@@ -472,6 +511,13 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                 type="button"
               >
                 Leave room
+              </button>
+              <button
+                className="ml-5 mt-8 text-sm text-slate-400 underline underline-offset-4 hover:text-slate-200"
+                onClick={() => void copyBetaDiagnostics()}
+                type="button"
+              >
+                {diagnosticsCopied ? "Diagnostics copied" : "Copy beta diagnostics"}
               </button>
             </aside>
           </div>
@@ -920,7 +966,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
               Install app
             </button>
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-              Phase 16
+              Phase 20 beta
             </span>
           </div>
         </header>

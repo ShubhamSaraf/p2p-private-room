@@ -43,7 +43,9 @@
     "check:bundle": "npm run build --workspace @peerlink/web && node scripts/check-bundle-size.mjs",
     "check:phase17": "npm run check && npm run check:bundle && npm run test:e2e",
     "audit:dependencies": "npm audit --audit-level=high",
-    "check:phase18": "npm run check && npm run check:bundle && npm run audit:dependencies && npm run test:e2e"
+    "check:phase18": "npm run check && npm run check:bundle && npm run audit:dependencies && npm run test:e2e",
+    "check:phase19": "npm run check:phase18",
+    "check:phase20": "npm run check:phase19"
   },
   "engines": {
     "node": ">=22.13"

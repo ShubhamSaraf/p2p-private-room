@@ -167,10 +167,14 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export function isRequestOriginAllowed(request: Request, env: Pick<Env, "APP_ORIGIN">): boolean {
+export function isRequestOriginAllowed(
+  request: Request,
+  env: Pick<Env, "APP_ORIGIN" | "APP_PREVIEW_ORIGIN">,
+): boolean {
   const origin = request.headers.get("Origin");
   if (!origin) return false;
   if (origin === env.APP_ORIGIN) return true;
+  if (origin === env.APP_PREVIEW_ORIGIN) return true;
 
   const requestHostname = new URL(request.url).hostname;
   const isLocalWorker = isLocalHostname(requestHostname);
@@ -178,7 +182,10 @@ export function isRequestOriginAllowed(request: Request, env: Pick<Env, "APP_ORI
   return isLocalWorker && isLocalFrontend;
 }
 
-export function createCorsHeaders(request: Request, env: Pick<Env, "APP_ORIGIN">): Headers {
+export function createCorsHeaders(
+  request: Request,
+  env: Pick<Env, "APP_ORIGIN" | "APP_PREVIEW_ORIGIN">,
+): Headers {
   const headers = new Headers({
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",

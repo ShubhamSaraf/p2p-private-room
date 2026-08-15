@@ -1,0 +1,40 @@
+name: PeerLink beta report
+description: Report connection or transfer behavior without sharing private content.
+title: "[Beta] "
+labels: [beta]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include room URLs, shared secrets, message text, file names, or file contents.
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options: [Worked, Partially worked, Failed]
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network pairing
+      options:
+        [
+          Same Wi-Fi,
+          Different home networks,
+          Wi-Fi to cellular,
+          Cellular to cellular,
+          Corporate or university network,
+        ]
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Content-free diagnostics
+      description: Paste the JSON from Copy beta diagnostics. Inspect it before submitting.
+      render: json
+  - type: textarea
+    id: notes
+    attributes:
+      label: Reproduction notes
+      description: Browser/device versions and steps only; omit private content.

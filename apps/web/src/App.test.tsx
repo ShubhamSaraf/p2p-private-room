@@ -27,6 +27,10 @@ vi.mock("./webrtc/usePeerRoom", () => ({
     role: "initiator",
     peerConnection: "connected",
     dataChannel: "open",
+    connectionPath: "direct",
+    turnAvailability: "available",
+    connectionStartedAt: 1_723_456_780_000,
+    connectedAt: 1_723_456_781_250,
     authentication: "verified",
     authError: null,
     messages: [
@@ -129,5 +133,22 @@ describe("App", () => {
     );
     expect(input).toHaveValue("");
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("copies content-free beta diagnostics", async () => {
+    const writeText = vi.fn<(value: string) => Promise<void>>(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    window.history.replaceState(null, "", `/r/${roomId}`);
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy beta diagnostics" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    const report = String(writeText.mock.calls[0]?.[0]);
+    expect(report).toContain('"connectTimeMs": 1250');
+    expect(report).not.toContain(roomId);
+    expect(report).not.toContain("A message from the peer");
   });
 });

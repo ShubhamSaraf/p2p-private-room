@@ -60,6 +60,8 @@ export type PeerRoomState = {
   dataChannel: RTCDataChannelState | "none";
   connectionPath: ConnectionPath;
   turnAvailability: TurnAvailability;
+  connectionStartedAt: number;
+  connectedAt: number | null;
   authentication: AuthenticationPhase;
   authError: string | null;
   messages: ChatEntry[];
@@ -100,6 +102,8 @@ export const INITIAL_PEER_ROOM_STATE: PeerRoomState = {
   dataChannel: "none",
   connectionPath: "unknown",
   turnAvailability: "checking",
+  connectionStartedAt: 0,
+  connectedAt: null,
   authentication: "waiting-for-peer",
   authError: null,
   messages: [],
@@ -173,6 +177,7 @@ export class PeerRoomSession {
     this.roomId = options.roomId;
     this.signalingUrl = options.signalingUrl;
     this.onStateChange = options.onStateChange;
+    this.state = { ...INITIAL_PEER_ROOM_STATE, connectionStartedAt: Date.now() };
   }
 
   connect(): void {
@@ -651,6 +656,7 @@ export class PeerRoomSession {
         phase: "connected",
         dataChannel: "open",
         authentication: "required",
+        connectedAt: Date.now(),
         authError: null,
         error: null,
       });
@@ -1259,6 +1265,8 @@ export class PeerRoomSession {
       dataChannel: "none",
       connectionPath: "unknown",
       authentication: "waiting-for-peer",
+      connectionStartedAt: preserveTransfers ? Date.now() : this.state.connectionStartedAt,
+      connectedAt: null,
       authError: null,
       ...preservedState,
       chatError: null,
