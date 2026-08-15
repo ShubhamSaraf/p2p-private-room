@@ -5,10 +5,28 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/coverage/**", "**/.wrangler/**", "node_modules/**"],
+    ignores: [
+      "**/dist/**",
+      "**/coverage/**",
+      "**/.wrangler/**",
+      "**/worker-configuration.d.ts",
+      "node_modules/**",
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ["**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+    },
+  },
   {
     files: ["apps/web/src/**/*.{ts,tsx}"],
     plugins: {

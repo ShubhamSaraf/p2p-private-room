@@ -3,6 +3,7 @@
   "name": "peerlink-signaling",
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "APP_ORIGIN": "https://peerlink.shubhamsaraf.dev",
   },
@@ -20,4 +21,14 @@
       "new_sqlite_classes": ["Room"],
     },
   ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1,
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1,
+    },
+  },
 }

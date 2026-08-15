@@ -3,6 +3,6 @@ dist
 coverage
 .wrangler
 package-lock.json
+apps/signaling/src/worker-configuration.d.ts
 PeerLink_P2P_Private_Room_Architecture.md
 PeerLink_Development_Phases(1).md
-

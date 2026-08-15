@@ -15,10 +15,12 @@
     "build": "npm run build --workspace @peerlink/protocol && npm run build --workspace @peerlink/web && npm run build --workspace @peerlink/signaling",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "test:e2e": "npm run test:e2e --workspace @peerlink/web",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
+    "check:phase1": "npm run check && npm run test:e2e"
   },
   "engines": {
     "node": ">=22.13"
