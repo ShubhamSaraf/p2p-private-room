@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "peerlink-signaling",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-08-15",
+  "vars": {
+    "APP_ORIGIN": "https://peerlink.shubhamsaraf.dev",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOMS",
+        "class_name": "Room",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Room"],
+    },
+  ],
+}

@@ -1,0 +1,35 @@
+{
+  "name": "peerlink",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Accountless, temporary, two-person peer-to-peer rooms.",
+  "workspaces": [
+    "packages/protocol",
+    "apps/web",
+    "apps/signaling"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @peerlink/web",
+    "dev:signaling": "npm run dev --workspace @peerlink/signaling",
+    "build": "npm run build --workspace @peerlink/protocol && npm run build --workspace @peerlink/web && npm run build --workspace @peerlink/signaling",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.0.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "prettier": "^3.9.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.67.0"
+  }
+}
