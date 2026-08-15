@@ -58,6 +58,28 @@ describe("PeerLink CPace authentication", () => {
     destroyPakeResult(responderResult);
   });
 
+  it("performs key confirmation without secure-context WebCrypto", async () => {
+    const sid = crypto.getRandomValues(new Uint8Array(PAKE_SESSION_ID_BYTES));
+    const initiator = startPake({ secret: "same secret", sid, channelId, role: "initiator" });
+    const responder = startPake({ secret: "same secret", sid, channelId, role: "responder" });
+    const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+
+    try {
+      Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} });
+      const initiatorResult = await finishPake({ state: initiator, peerShare: responder.ownShare });
+      const responderResult = await finishPake({ state: responder, peerShare: initiator.ownShare });
+      expect(await verifyPakeConfirmation(initiatorResult, responderResult.ownConfirmation)).toBe(
+        true,
+      );
+      destroyPakeResult(initiatorResult);
+      destroyPakeResult(responderResult);
+    } finally {
+      if (cryptoDescriptor) Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
+      destroyPakeState(initiator);
+      destroyPakeState(responder);
+    }
+  });
+
   it("validates shared-secret length without retaining it", () => {
     expect(validateSharedSecret("short")).toBe("Use at least 6 characters.");
     expect(validateSharedSecret("sixsix")).toBeNull();

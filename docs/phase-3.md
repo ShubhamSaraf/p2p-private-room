@@ -11,6 +11,7 @@
 - direct chat locked until mutual confirmation succeeds
 - clear waiting, secret-required, authenticating, verified, and mismatch UI states
 - password input cleared immediately after submission
+- confirmation hashing that works on local-network HTTP previews without `crypto.subtle`
 - Worker-runtime coverage proving PAKE-shaped frames are rejected as signaling
 
 The shared secret is not added to the URL, logged, persisted, or sent to Cloudflare. Only CPace public shares and confirmation tags cross the direct WebRTC DataChannel. The derived session key remains in browser memory for the lifetime of the peer connection so Phase 4 can use it for application-layer encryption.

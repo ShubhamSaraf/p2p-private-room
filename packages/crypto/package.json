@@ -15,7 +15,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cipherman/pake-js": "0.1.1"
+    "@cipherman/pake-js": "0.1.1",
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0"
   },
   "devDependencies": {
     "vitest": "^4.1.10"

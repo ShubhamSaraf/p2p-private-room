@@ -226,7 +226,7 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                 <ConnectionRow
                   label="Authentication"
                   connected={state.authentication === "verified"}
-                  value={authenticationLabel(state.authentication)}
+                  value={authenticationLabel(state.authentication, state.authError)}
                 />
                 <ConnectionRow label="STUN" connected value="Cloudflare" />
               </dl>
@@ -245,7 +245,7 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
               <div>
                 <p className="text-sm font-medium text-cyan-300">Peer authentication</p>
                 <h2 className="mt-2 text-2xl font-semibold">
-                  {authenticationHeading(state.authentication)}
+                  {authenticationHeading(state.authentication, state.authError)}
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-6 text-slate-400">
                   Both people enter the same secret. A PAKE verifies the match without sending the
@@ -511,20 +511,26 @@ function formatState(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function authenticationLabel(authentication: string): string {
+function authenticationLabel(authentication: string, authError: string | null): string {
   if (authentication === "verified") return "Secret verified";
   if (authentication === "authenticating") return "Authenticating";
-  if (authentication === "failed") return "Secret mismatch";
+  if (authentication === "failed")
+    return isSecretMismatch(authError) ? "Secret mismatch" : "Failed";
   if (authentication === "required") return "Secret required";
   return "Waiting for peer";
 }
 
-function authenticationHeading(authentication: string): string {
+function authenticationHeading(authentication: string, authError: string | null): string {
   if (authentication === "verified") return "Shared secret verified";
   if (authentication === "authenticating") return "Authenticating…";
-  if (authentication === "failed") return "Secret mismatch";
+  if (authentication === "failed")
+    return isSecretMismatch(authError) ? "Secret mismatch" : "Authentication failed";
   if (authentication === "required") return "Enter shared secret";
   return "Waiting for peer";
+}
+
+function isSecretMismatch(authError: string | null): boolean {
+  return authError?.startsWith("Shared secrets do not match") ?? false;
 }
 
 function authenticationDescription(authentication: string): string {

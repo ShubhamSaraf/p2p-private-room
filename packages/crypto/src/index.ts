@@ -1,4 +1,7 @@
 import { ristretto255 } from "@cipherman/pake-js/cpace";
+import { equalBytes } from "@noble/curves/utils";
+import { hmac } from "@noble/hashes/hmac";
+import { sha512 } from "@noble/hashes/sha512";
 
 const encoder = new TextEncoder();
 const CPACE_MAC_LABEL = encoder.encode("CPaceMac");
@@ -24,7 +27,7 @@ export type PakeState = {
 export type PakeResult = {
   sessionKey: Uint8Array;
   ownConfirmation: Uint8Array;
-  confirmationKey: CryptoKey;
+  confirmationKey: Uint8Array;
   peerConfirmationData: Uint8Array;
 };
 
@@ -90,26 +93,11 @@ export async function finishPake(options: {
     role: options.state.role,
   });
 
-  const confirmationKeyBytes = new Uint8Array(
-    await crypto.subtle.digest(
-      "SHA-512",
-      toArrayBuffer(concatBytes(CPACE_MAC_LABEL, options.state.sid, sessionKey)),
-    ),
-  );
-  const confirmationKey = await crypto.subtle.importKey(
-    "raw",
-    confirmationKeyBytes,
-    { name: "HMAC", hash: "SHA-512" },
-    false,
-    ["sign", "verify"],
-  );
-  confirmationKeyBytes.fill(0);
+  const confirmationKey = sha512(concatBytes(CPACE_MAC_LABEL, options.state.sid, sessionKey));
 
   const ownConfirmationData = lengthValue(options.state.ownShare, ownAD);
   const peerConfirmationData = lengthValue(options.peerShare, peerAD);
-  const ownConfirmation = new Uint8Array(
-    await crypto.subtle.sign("HMAC", confirmationKey, toArrayBuffer(ownConfirmationData)),
-  );
+  const ownConfirmation = hmac(sha512, confirmationKey, ownConfirmationData);
 
   return { sessionKey, ownConfirmation, confirmationKey, peerConfirmationData };
 }
@@ -119,12 +107,10 @@ export async function verifyPakeConfirmation(
   peerConfirmation: Uint8Array,
 ): Promise<boolean> {
   if (peerConfirmation.length !== PAKE_CONFIRMATION_BYTES) return false;
-  return crypto.subtle.verify(
-    "HMAC",
-    result.confirmationKey,
-    toArrayBuffer(peerConfirmation),
-    toArrayBuffer(result.peerConfirmationData),
-  );
+  const expected = hmac(sha512, result.confirmationKey, result.peerConfirmationData);
+  const verified = equalBytes(expected, peerConfirmation);
+  expected.fill(0);
+  return verified;
 }
 
 export function destroyPakeState(state: PakeState | null): void {
@@ -136,6 +122,7 @@ export function destroyPakeState(state: PakeState | null): void {
 export function destroyPakeResult(result: PakeResult | null): void {
   if (!result) return;
   result.sessionKey.fill(0);
+  result.confirmationKey.fill(0);
   result.ownConfirmation.fill(0);
   result.peerConfirmationData.fill(0);
 }
@@ -178,8 +165,4 @@ function concatBytes(...values: Uint8Array[]): Uint8Array {
     offset += value.length;
   }
   return output;
-}
-
-function toArrayBuffer(value: Uint8Array): ArrayBuffer {
-  return new Uint8Array(value).buffer;
 }
