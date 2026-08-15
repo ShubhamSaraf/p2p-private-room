@@ -14,6 +14,7 @@
   "dependencies": {
     "@peerlink/crypto": "*",
     "@peerlink/protocol": "*",
+    "@peerlink/transfer": "*",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.0.5",
     "react": "^19.2.8",

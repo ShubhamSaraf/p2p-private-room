@@ -7,6 +7,7 @@
   "workspaces": [
     "packages/protocol",
     "packages/crypto",
+    "packages/transfer",
     "apps/web",
     "apps/signaling"
   ],
@@ -24,7 +25,11 @@
     "check:phase1": "npm run check && npm run test:e2e",
     "check:phase2": "npm run check && npm run test:e2e",
     "check:phase3": "npm run check && npm run test:e2e",
-    "check:phase4": "npm run check && npm run test:e2e"
+    "check:phase4": "npm run check && npm run test:e2e",
+    "check:phase5": "npm run check && npm run test:e2e",
+    "check:phase6": "npm run check && npm run test:e2e",
+    "check:phase6.5": "npm run check && npm run test:e2e",
+    "check:phase7": "npm run check && npm run test:e2e"
   },
   "engines": {
     "node": ">=22.13"

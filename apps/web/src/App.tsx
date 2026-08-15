@@ -5,9 +5,10 @@ import {
   type ServiceHealth,
 } from "@peerlink/protocol";
 import { SHARED_SECRET_MAX_LENGTH, SHARED_SECRET_MIN_LENGTH } from "@peerlink/crypto";
-import { type FormEvent, useEffect, useState } from "react";
+import { isProbablyCompressed } from "@peerlink/transfer";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
-import type { ChatEntry } from "./webrtc/PeerRoomSession";
+import type { ChatEntry, TransferEntry } from "./webrtc/PeerRoomSession";
 
 import { createRoom, getRoomIdFromPath } from "./api";
 import { SIGNALING_URL } from "./config";
@@ -102,8 +103,8 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
         </div>
 
         <aside className="glass-card rounded-3xl p-6 sm:p-8" aria-label="Service status">
-          <p className="text-sm font-medium text-slate-400">Phase 4 status</p>
-          <h2 className="mt-2 text-2xl font-semibold">Encrypted private chat</h2>
+          <p className="text-sm font-medium text-slate-400">Phase 7 status</p>
+          <h2 className="mt-2 text-2xl font-semibold">Verified encrypted transfers</h2>
           <dl className="mt-8 space-y-5 text-sm">
             <StatusRow label="Signaling service" value={healthLabel(health)} state={health} />
             <StatusRow label="Room capacity" value="Two peers" />
@@ -126,6 +127,16 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
   const [secret, setSecret] = useState("");
   const [secretError, setSecretError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const [pendingFile, setPendingFile] = useState<{
+    file: File;
+    category: "image" | "file";
+  } | null>(null);
+  const [compressedFile, setCompressedFile] = useState<File | null>(null);
+  const [compressionProgress, setCompressionProgress] = useState<number | null>(null);
+  const imagePickerRef = useRef<HTMLInputElement>(null);
+  const filePickerRef = useRef<HTMLInputElement>(null);
+  const compressionWorkerRef = useRef<Worker | null>(null);
   const inviteUrl = `${window.location.origin}/r/${roomId}`;
 
   async function copyInvite() {
@@ -156,6 +167,60 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
     setSecret("");
     const result = await state.startAuthentication(submittedSecret);
     if (!result.ok) setSecretError(result.error);
+  }
+
+  function offerSelectedFile(file: File | undefined, category: "image" | "file") {
+    if (!file) return;
+    setPendingFile({ file, category });
+    setCompressedFile(null);
+    setCompressionProgress(null);
+    setTransferError(null);
+  }
+
+  function sendPendingFile(file: File) {
+    if (!pendingFile) return;
+    const result = state.offerFile(file, pendingFile.category);
+    setTransferError(result.ok ? null : result.error);
+    if (result.ok) closeCompressionDialog();
+  }
+
+  function closeCompressionDialog() {
+    compressionWorkerRef.current?.terminate();
+    compressionWorkerRef.current = null;
+    setPendingFile(null);
+    setCompressedFile(null);
+    setCompressionProgress(null);
+  }
+
+  function compressPendingFile() {
+    if (!pendingFile || compressionWorkerRef.current) return;
+    const worker = new Worker(new URL("./workers/compression.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    compressionWorkerRef.current = worker;
+    setCompressionProgress(0);
+    worker.addEventListener("message", (event: MessageEvent<unknown>) => {
+      if (!isCompressionWorkerMessage(event.data)) return;
+      if (event.data.type === "progress") {
+        setCompressionProgress(event.data.progress);
+        return;
+      }
+      compressionWorkerRef.current?.terminate();
+      compressionWorkerRef.current = null;
+      if (event.data.type === "error") {
+        setTransferError(event.data.message);
+        setCompressionProgress(null);
+        return;
+      }
+      setCompressedFile(
+        new File([event.data.bytes], event.data.name, {
+          type: "application/zip",
+          lastModified: event.data.lastModified,
+        }),
+      );
+      setCompressionProgress(100);
+    });
+    worker.postMessage({ file: pendingFile.file });
   }
 
   return (
@@ -311,6 +376,172 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
             ) : null}
           </section>
 
+          <section className="glass-card overflow-hidden rounded-3xl" aria-label="File transfers">
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-6 py-5 sm:px-8">
+              <div>
+                <p className="text-sm font-medium text-slate-400">Encrypted transfers</p>
+                <h2 className="mt-1 text-xl font-semibold">Images and files stay peer-to-peer</h2>
+              </div>
+              <div className="flex gap-3">
+                <input
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="sr-only"
+                  id="image-picker"
+                  onChange={(event) => {
+                    offerSelectedFile(event.target.files?.[0], "image");
+                    event.target.value = "";
+                  }}
+                  ref={imagePickerRef}
+                  type="file"
+                />
+                <button
+                  className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-sm font-medium text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={state.authentication !== "verified"}
+                  onClick={() => imagePickerRef.current?.click()}
+                  type="button"
+                >
+                  Send image
+                </button>
+                <input
+                  className="sr-only"
+                  id="file-picker"
+                  onChange={(event) => {
+                    offerSelectedFile(event.target.files?.[0], "file");
+                    event.target.value = "";
+                  }}
+                  ref={filePickerRef}
+                  type="file"
+                />
+                <button
+                  className="rounded-xl bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={state.authentication !== "verified"}
+                  onClick={() => filePickerRef.current?.click()}
+                  type="button"
+                >
+                  Send file
+                </button>
+              </div>
+            </div>
+
+            {pendingFile ? (
+              <div className="mx-6 mt-6 rounded-2xl border border-cyan-300/20 bg-cyan-300/6 p-5 sm:mx-8">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="font-medium">Send {pendingFile.file.name}</p>
+                    <p className="mt-1 text-sm text-slate-400">
+                      Original: {formatBytes(pendingFile.file.size)}
+                    </p>
+                  </div>
+                  <button
+                    className="text-sm text-slate-400"
+                    onClick={closeCompressionDialog}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+                {isProbablyCompressed(pendingFile.file.name) ? (
+                  <p className="mt-4 text-sm text-amber-200">
+                    This format is usually already compressed. Sending the original is recommended.
+                  </p>
+                ) : null}
+                {compressionProgress !== null && !compressedFile ? (
+                  <div className="mt-4">
+                    <p className="text-sm text-slate-300">
+                      Compressing locally… {compressionProgress}%
+                    </p>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/8">
+                      <div
+                        className="h-full bg-cyan-300"
+                        style={{ width: `${compressionProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {compressedFile ? (
+                  <p
+                    className={`mt-4 text-sm ${compressedFile.size < pendingFile.file.size ? "text-emerald-200" : "text-amber-200"}`}
+                  >
+                    ZIP: {formatBytes(compressedFile.size)}.{" "}
+                    {compressedFile.size < pendingFile.file.size
+                      ? `${(((pendingFile.file.size - compressedFile.size) / Math.max(1, pendingFile.file.size)) * 100).toFixed(1)}% saved.`
+                      : "Compression did not reduce this file; send the original."}
+                  </p>
+                ) : null}
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <button
+                    className="rounded-xl bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50"
+                    disabled={compressionWorkerRef.current !== null}
+                    onClick={() => sendPendingFile(pendingFile.file)}
+                    type="button"
+                  >
+                    Send original
+                  </button>
+                  {compressedFile ? (
+                    <button
+                      className="rounded-xl border border-cyan-300/25 px-4 py-2 text-sm font-medium text-cyan-200"
+                      onClick={() => sendPendingFile(compressedFile)}
+                      type="button"
+                    >
+                      Send compressed ZIP
+                    </button>
+                  ) : (
+                    <button
+                      className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 disabled:opacity-50"
+                      disabled={compressionWorkerRef.current !== null}
+                      onClick={compressPendingFile}
+                      type="button"
+                    >
+                      Compress first
+                    </button>
+                  )}
+                  {compressionWorkerRef.current ? (
+                    <button
+                      className="text-sm text-rose-300 underline underline-offset-4"
+                      onClick={closeCompressionDialog}
+                      type="button"
+                    >
+                      Cancel compression
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="grid gap-4 p-6 sm:grid-cols-2 sm:p-8">
+              {state.transfers.length === 0 ? (
+                <p className="text-sm text-slate-400 sm:col-span-2">
+                  Choose an image or file after authentication. The receiver must accept before any
+                  file bytes are sent.
+                </p>
+              ) : (
+                state.transfers.map((transfer) => (
+                  <TransferCard
+                    key={transfer.id}
+                    onAccept={() => {
+                      const result = state.acceptTransfer(transfer.id);
+                      if (!result.ok) setTransferError(result.error);
+                    }}
+                    onCancel={() => {
+                      const result = state.cancelTransfer(transfer.id);
+                      if (!result.ok) setTransferError(result.error);
+                    }}
+                    onDecline={() => {
+                      const result = state.declineTransfer(transfer.id);
+                      if (!result.ok) setTransferError(result.error);
+                    }}
+                    transfer={transfer}
+                  />
+                ))
+              )}
+            </div>
+            {transferError ? (
+              <p className="px-6 pb-6 text-sm text-rose-300" role="alert">
+                {transferError}
+              </p>
+            ) : null}
+          </section>
+
           <section className="glass-card overflow-hidden rounded-3xl" aria-label="Direct chat">
             <div className="border-b border-white/10 px-6 py-5 sm:px-8">
               <p className="text-sm font-medium text-slate-400">Direct chat</p>
@@ -391,7 +622,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
             {PRODUCT_NAME}
           </a>
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-            Phase 4
+            Phase 7
           </span>
         </header>
         {children}
@@ -427,6 +658,141 @@ function ChatBubble({ message }: { message: ChatEntry }) {
         <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{message.text}</p>
       </div>
     </li>
+  );
+}
+
+function TransferCard({
+  transfer,
+  onAccept,
+  onDecline,
+  onCancel,
+}: {
+  transfer: TransferEntry;
+  onAccept: () => void;
+  onDecline: () => void;
+  onCancel: () => void;
+}) {
+  const progress = transfer.size === 0 ? 100 : (transfer.bytesTransferred / transfer.size) * 100;
+  const active = transfer.status === "waiting" || transfer.status === "transferring";
+
+  return (
+    <article
+      className="rounded-2xl border border-white/10 bg-slate-950/45 p-4"
+      data-transfer-id={transfer.id}
+    >
+      {transfer.category === "image" && transfer.objectUrl ? (
+        <img
+          alt={transfer.name}
+          className="mb-4 max-h-64 w-full rounded-xl bg-slate-900 object-contain"
+          src={transfer.objectUrl}
+        />
+      ) : null}
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="truncate font-medium" title={transfer.name}>
+            {transfer.name}
+          </p>
+          <p className="mt-1 text-xs text-slate-400">
+            {formatBytes(transfer.size)} ·{" "}
+            {transfer.direction === "incoming" ? "From peer" : "To peer"}
+          </p>
+        </div>
+        <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-slate-300">
+          {formatTransferStatus(transfer)}
+        </span>
+      </div>
+
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/8">
+        <div className="h-full bg-cyan-300 transition-[width]" style={{ width: `${progress}%` }} />
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        {formatBytes(transfer.bytesTransferred)} / {formatBytes(transfer.size)}
+      </p>
+
+      {transfer.status === "offered" ? (
+        <div className="mt-4 flex gap-2">
+          <button
+            className="rounded-lg bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
+            onClick={onAccept}
+            type="button"
+          >
+            Accept
+          </button>
+          <button
+            className="rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-300"
+            onClick={onDecline}
+            type="button"
+          >
+            Decline
+          </button>
+        </div>
+      ) : null}
+      {active ? (
+        <button
+          className="mt-4 text-sm text-rose-300 underline underline-offset-4"
+          onClick={onCancel}
+          type="button"
+        >
+          Cancel
+        </button>
+      ) : null}
+      {transfer.status === "completed" && transfer.objectUrl ? (
+        <a
+          className="mt-4 inline-block text-sm font-medium text-cyan-200 underline underline-offset-4"
+          download={transfer.name}
+          href={transfer.objectUrl}
+        >
+          Download {transfer.name}
+        </a>
+      ) : null}
+      {transfer.error ? <p className="mt-3 text-xs text-rose-300">{transfer.error}</p> : null}
+    </article>
+  );
+}
+
+function formatTransferStatus(transfer: TransferEntry): string {
+  if (transfer.status === "completed")
+    return transfer.integrity === "verified" ? "Verified" : "Completed";
+  return transfer.status.charAt(0).toUpperCase() + transfer.status.slice(1);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0] ?? "KB";
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index] ?? unit;
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
+}
+
+type CompressionWorkerMessage =
+  | { type: "progress"; progress: number }
+  | { type: "error"; message: string }
+  | {
+      type: "complete";
+      name: string;
+      lastModified: number;
+      originalSize: number;
+      bytes: ArrayBuffer;
+    };
+
+function isCompressionWorkerMessage(value: unknown): value is CompressionWorkerMessage {
+  if (typeof value !== "object" || value === null || !("type" in value)) return false;
+  if (value.type === "progress") return "progress" in value && typeof value.progress === "number";
+  if (value.type === "error") return "message" in value && typeof value.message === "string";
+  return (
+    value.type === "complete" &&
+    "name" in value &&
+    typeof value.name === "string" &&
+    "lastModified" in value &&
+    typeof value.lastModified === "number" &&
+    "originalSize" in value &&
+    typeof value.originalSize === "number" &&
+    "bytes" in value &&
+    value.bytes instanceof ArrayBuffer
   );
 }
 

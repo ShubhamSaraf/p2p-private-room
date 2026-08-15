@@ -7,11 +7,16 @@ import {
   type PeerRoomState,
   type SendChatResult,
   type StartAuthenticationResult,
+  type TransferActionResult,
 } from "./PeerRoomSession";
 
 export type PeerRoomController = PeerRoomState & {
   sendChatMessage: (text: string) => SendChatResult;
   startAuthentication: (secret: string) => Promise<StartAuthenticationResult>;
+  offerFile: (file: File, category: "image" | "file") => TransferActionResult;
+  acceptTransfer: (id: string) => TransferActionResult;
+  declineTransfer: (id: string) => TransferActionResult;
+  cancelTransfer: (id: string) => TransferActionResult;
 };
 
 export function usePeerRoom(roomId: string): PeerRoomController {
@@ -53,5 +58,40 @@ export function usePeerRoom(roomId: string): PeerRoomController {
     [],
   );
 
-  return { ...state, sendChatMessage, startAuthentication };
+  const offerFile = useCallback(
+    (file: File, category: "image" | "file"): TransferActionResult =>
+      sessionRef.current?.offerFile(file, category) ?? {
+        ok: false,
+        error: "The room is not connected yet.",
+      },
+    [],
+  );
+
+  const acceptTransfer = useCallback(
+    (id: string): TransferActionResult =>
+      sessionRef.current?.acceptTransfer(id) ?? { ok: false, error: "Transfer not found." },
+    [],
+  );
+
+  const declineTransfer = useCallback(
+    (id: string): TransferActionResult =>
+      sessionRef.current?.declineTransfer(id) ?? { ok: false, error: "Transfer not found." },
+    [],
+  );
+
+  const cancelTransfer = useCallback(
+    (id: string): TransferActionResult =>
+      sessionRef.current?.cancelTransfer(id) ?? { ok: false, error: "Transfer not found." },
+    [],
+  );
+
+  return {
+    ...state,
+    sendChatMessage,
+    startAuthentication,
+    offerFile,
+    acceptTransfer,
+    declineTransfer,
+    cancelTransfer,
+  };
 }

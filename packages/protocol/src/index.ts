@@ -5,6 +5,8 @@ export const CHAT_MESSAGE_MAX_LENGTH = 2_000 as const;
 export const AUTH_PROTOCOL_VERSION = 1 as const;
 export const ENCRYPTION_PROTOCOL_VERSION = 1 as const;
 export const ENCRYPTED_CONTROL_MAX_LENGTH = 87_404 as const;
+export const FILE_NAME_MAX_LENGTH = 255 as const;
+export const FILE_MIME_MAX_LENGTH = 255 as const;
 
 export type PeerRole = "initiator" | "responder";
 
@@ -29,6 +31,49 @@ export type ChatMessage = {
   timestamp: number;
   text: string;
 };
+
+export type FileOfferMessage = {
+  type: "file-offer";
+  id: string;
+  name: string;
+  size: number;
+  mime: string;
+  category: "image" | "file";
+  lastModified: number;
+};
+
+export type FileDecisionMessage = {
+  type: "file-accept" | "file-decline";
+  id: string;
+};
+
+export type FileCancelMessage = {
+  type: "file-cancel";
+  id: string;
+  reason: string;
+};
+
+export type FileCompleteMessage = {
+  type: "file-complete";
+  id: string;
+  chunks: number;
+  sha256: string;
+};
+
+export type FileVerifiedMessage = {
+  type: "file-verified";
+  id: string;
+  sha256: string;
+};
+
+export type TransferControlMessage =
+  | FileOfferMessage
+  | FileDecisionMessage
+  | FileCancelMessage
+  | FileCompleteMessage
+  | FileVerifiedMessage;
+
+export type ApplicationMessage = ChatMessage | TransferControlMessage;
 
 export type PakeShareMessage = {
   type: "pake-share";
@@ -112,6 +157,49 @@ export function isChatMessage(value: unknown): value is ChatMessage {
   );
 }
 
+export function isTransferControlMessage(value: unknown): value is TransferControlMessage {
+  if (!isRecord(value) || typeof value.type !== "string" || !isUuidValue(value.id)) return false;
+
+  if (value.type === "file-offer") {
+    return (
+      typeof value.name === "string" &&
+      value.name.length > 0 &&
+      value.name.length <= FILE_NAME_MAX_LENGTH &&
+      !hasControlCharacters(value.name) &&
+      typeof value.size === "number" &&
+      Number.isSafeInteger(value.size) &&
+      value.size >= 0 &&
+      typeof value.mime === "string" &&
+      value.mime.length <= FILE_MIME_MAX_LENGTH &&
+      (value.category === "image" || value.category === "file") &&
+      typeof value.lastModified === "number" &&
+      Number.isSafeInteger(value.lastModified) &&
+      value.lastModified >= 0
+    );
+  }
+
+  if (value.type === "file-accept" || value.type === "file-decline") return true;
+  if (value.type === "file-cancel") {
+    return typeof value.reason === "string" && value.reason.length <= 256;
+  }
+  if (value.type === "file-complete" || value.type === "file-verified") {
+    return (
+      (value.type === "file-verified" ||
+        (typeof value.chunks === "number" &&
+          Number.isSafeInteger(value.chunks) &&
+          value.chunks >= 0 &&
+          value.chunks <= 0xffffffff)) &&
+      typeof value.sha256 === "string" &&
+      /^[0-9a-f]{64}$/.test(value.sha256)
+    );
+  }
+  return false;
+}
+
+export function isApplicationMessage(value: unknown): value is ApplicationMessage {
+  return isChatMessage(value) || isTransferControlMessage(value);
+}
+
 export function isAuthenticationMessage(value: unknown): value is AuthenticationMessage {
   if (!isRecord(value) || value.version !== AUTH_PROTOCOL_VERSION) return false;
 
@@ -180,6 +268,17 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function isUuidValue(value: unknown): value is string {
+  return typeof value === "string" && isUuid(value);
+}
+
 function isBase64Url(value: unknown, length: number): value is string {
   return typeof value === "string" && value.length === length && /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function hasControlCharacters(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  });
 }

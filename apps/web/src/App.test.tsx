@@ -3,7 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 
-const { roomOverrides, sendChatMessage, startAuthentication } = vi.hoisted(() => ({
+const {
+  acceptTransfer,
+  cancelTransfer,
+  declineTransfer,
+  offerFile,
+  roomOverrides,
+  sendChatMessage,
+  startAuthentication,
+} = vi.hoisted(() => ({
+  acceptTransfer: vi.fn(() => ({ ok: true as const })),
+  cancelTransfer: vi.fn(() => ({ ok: true as const })),
+  declineTransfer: vi.fn(() => ({ ok: true as const })),
+  offerFile: vi.fn(() => ({ ok: true as const })),
   roomOverrides: {} as Record<string, unknown>,
   sendChatMessage: vi.fn(() => ({ ok: true as const })),
   startAuthentication: vi.fn(async () => ({ ok: true as const })),
@@ -26,10 +38,15 @@ vi.mock("./webrtc/usePeerRoom", () => ({
         direction: "incoming",
       },
     ],
+    transfers: [],
     chatError: null,
     error: null,
     sendChatMessage,
     startAuthentication,
+    offerFile,
+    acceptTransfer,
+    declineTransfer,
+    cancelTransfer,
     ...roomOverrides,
   }),
 }));
@@ -40,6 +57,7 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/");
   sendChatMessage.mockClear();
   startAuthentication.mockClear();
+  offerFile.mockClear();
   for (const key of Object.keys(roomOverrides)) delete roomOverrides[key];
 });
 

@@ -10,6 +10,8 @@ import {
   isAuthenticationMessage,
   isControlMessage,
   isEncryptedControlMessage,
+  isApplicationMessage,
+  isTransferControlMessage,
   isClientSignalingMessage,
   isRoomId,
   isServerSignalingMessage,
@@ -108,5 +110,28 @@ describe("shared protocol", () => {
     expect(isChatMessage({ ...message, text: "x".repeat(CHAT_MESSAGE_MAX_LENGTH + 1) })).toBe(
       false,
     );
+  });
+
+  it("validates file offers, decisions, and integrity completion", () => {
+    const offer = {
+      type: "file-offer",
+      id: "9f23ce7e-1821-4b74-b60a-0d8185631d99",
+      name: "photo.png",
+      size: 1024,
+      mime: "image/png",
+      category: "image",
+      lastModified: 1_723_456_789_000,
+    };
+    expect(isTransferControlMessage(offer)).toBe(true);
+    expect(isApplicationMessage(offer)).toBe(true);
+    expect(isTransferControlMessage({ ...offer, name: "bad\u0000name" })).toBe(false);
+    expect(
+      isTransferControlMessage({
+        type: "file-complete",
+        id: offer.id,
+        chunks: 1,
+        sha256: "a".repeat(64),
+      }),
+    ).toBe(true);
   });
 });

@@ -33,7 +33,7 @@ test("two browser pages connect and exchange direct chat messages", async ({ con
   await expect(page.getByText("DataChannel open", { exact: true })).toBeVisible();
   await expect(peerPage.getByText("DataChannel open", { exact: true })).toBeVisible();
 
-  await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
   await page.getByLabel("Shared secret").fill("phase three test secret");
   await peerPage.getByLabel("Shared secret").fill("phase three test secret");
   await Promise.all([
@@ -46,7 +46,7 @@ test("two browser pages connect and exchange direct chat messages", async ({ con
   await page
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("Hello from the initiator");
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByText("Hello from the initiator", { exact: true })).toBeVisible();
   await expect(peerPage.getByText("Hello from the initiator", { exact: true })).toBeVisible();
 
@@ -66,9 +66,53 @@ test("two browser pages connect and exchange direct chat messages", async ({ con
   await peerPage
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("Hello from the responder");
-  await peerPage.getByRole("button", { name: "Send" }).click();
+  await peerPage.getByRole("button", { name: "Send", exact: true }).click();
   await expect(peerPage.getByText("Hello from the responder", { exact: true })).toBeVisible();
   await expect(page.getByText("Hello from the responder", { exact: true })).toBeVisible();
+
+  const fileContents = "encrypted transfer payload ".repeat(4_000);
+  await page.locator("#file-picker").setInputFiles({
+    name: "phase-6-sample.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from(fileContents),
+  });
+  await page.getByRole("button", { name: "Send original" }).click();
+  const incomingFile = peerPage.locator("article", { hasText: "phase-6-sample.txt" });
+  await expect(incomingFile).toContainText("From peer");
+  await incomingFile.getByRole("button", { name: "Accept" }).click();
+  await expect(incomingFile).toContainText("Verified", { timeout: 20_000 });
+  const receivedContents = await incomingFile
+    .getByRole("link", { name: /Download/ })
+    .evaluate(async (link) =>
+      fetch((link as HTMLAnchorElement).href).then((response) => response.text()),
+    );
+  expect(receivedContents).toBe(fileContents);
+
+  const onePixelPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nWQAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await peerPage.locator("#image-picker").setInputFiles({
+    name: "phase-5-image.png",
+    mimeType: "image/png",
+    buffer: onePixelPng,
+  });
+  await peerPage.getByRole("button", { name: "Send original" }).click();
+  const incomingImage = page.locator("article", { hasText: "phase-5-image.png" });
+  await incomingImage.getByRole("button", { name: "Accept" }).click();
+  await expect(incomingImage).toContainText("Verified", { timeout: 20_000 });
+  await expect(incomingImage.getByRole("img", { name: "phase-5-image.png" })).toBeVisible();
+
+  await page.locator("#file-picker").setInputFiles({
+    name: "compress-me.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("category,value\npeerlink,1\n".repeat(1_000)),
+  });
+  await page.getByRole("button", { name: "Compress first" }).click();
+  await page.getByRole("button", { name: "Send compressed ZIP" }).click();
+  const incomingZip = peerPage.locator("article", { hasText: "compress-me.csv.zip" });
+  await incomingZip.getByRole("button", { name: "Accept" }).click();
+  await expect(incomingZip).toContainText("Verified", { timeout: 20_000 });
 
   const thirdPage = await context.newPage();
   await thirdPage.goto(inviteUrl);
@@ -83,6 +127,7 @@ test("different shared secrets keep direct chat locked", async ({ context, page 
   await page.goto("/");
   await expect(page.getByText("Signaling service").locator("..")).toContainText("Connected");
   await page.getByRole("button", { name: "Create private room" }).click();
+  await expect(page.getByRole("heading", { name: "Waiting for your peer" })).toBeVisible();
 
   const peerPage = await context.newPage();
   await peerPage.goto(page.url());
@@ -98,6 +143,6 @@ test("different shared secrets keep direct chat locked", async ({ context, page 
 
   await expect(page.getByText("Secret mismatch", { exact: true }).first()).toBeVisible();
   await expect(peerPage.getByText("Secret mismatch", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
-  await expect(peerPage.getByRole("button", { name: "Send" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+  await expect(peerPage.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
 });
