@@ -184,7 +184,7 @@ test("room controls stay within a mobile viewport", async ({ page }) => {
   }
 
   const connectionBounds = await connectionPanel.boundingBox();
-  expect(connectionBounds!.height).toBeLessThan(600);
+  expect(connectionBounds!.height).toBeLessThan(520);
 });
 
 test("different shared secrets keep direct chat locked", async ({ context, page }) => {
