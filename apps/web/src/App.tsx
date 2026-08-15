@@ -6,7 +6,6 @@ import {
 } from "@peerlink/protocol";
 import { SHARED_SECRET_MAX_LENGTH, SHARED_SECRET_MIN_LENGTH } from "@peerlink/crypto";
 import { isProbablyCompressed } from "@peerlink/transfer";
-import QRCode from "qrcode";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ChatEntry, TransferEntry } from "./webrtc/PeerRoomSession";
@@ -229,6 +228,7 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
       setQrCodeUrl(null);
       return;
     }
+    const { default: QRCode } = await import("qrcode");
     setQrCodeUrl(
       await QRCode.toDataURL(inviteUrl, {
         width: 320,
@@ -909,15 +909,16 @@ function PageShell({ children }: { children: React.ReactNode }) {
             {PRODUCT_NAME}
           </a>
           <div className="flex items-center gap-3">
-            {installPrompt ? (
-              <button
-                className="min-h-10 rounded-xl border border-cyan-300/25 px-3 text-xs font-medium text-cyan-200"
-                onClick={() => void installApp()}
-                type="button"
-              >
-                Install app
-              </button>
-            ) : null}
+            <button
+              aria-hidden={!installPrompt}
+              className={`min-h-10 rounded-xl border border-cyan-300/25 px-3 text-xs font-medium text-cyan-200 ${installPrompt ? "visible" : "invisible"}`}
+              disabled={!installPrompt}
+              onClick={() => void installApp()}
+              tabIndex={installPrompt ? 0 : -1}
+              type="button"
+            >
+              Install app
+            </button>
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
               Phase 16
             </span>

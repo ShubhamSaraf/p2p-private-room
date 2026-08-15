@@ -1,3 +1,5 @@
+import { isChatMessage } from "@peerlink/protocol";
+
 import type { ChatEntry } from "./webrtc/PeerRoomSession";
 
 const DATABASE_NAME = "peerlink-local-history";
@@ -34,6 +36,11 @@ export async function loadRoomMessages(roomId: string): Promise<ChatEntry[]> {
   await transactionComplete(transaction);
   database.close();
   return messages
+    .filter(
+      (message) =>
+        isChatMessage(message) &&
+        (message.direction === "incoming" || message.direction === "outgoing"),
+    )
     .map((message) => ({
       type: message.type,
       id: message.id,

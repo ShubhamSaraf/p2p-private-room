@@ -128,6 +128,7 @@ describe("shared protocol", () => {
     expect(isTransferControlMessage({ ...offer, name: "bad\u0000name" })).toBe(false);
     expect(isTransferControlMessage({ ...offer, relativePath: "folder/photo.png" })).toBe(true);
     expect(isTransferControlMessage({ ...offer, relativePath: "../photo.png" })).toBe(false);
+    expect(isTransferControlMessage({ ...offer, mime: "image/svg+xml" })).toBe(false);
     expect(
       isTransferControlMessage({
         type: "file-complete",

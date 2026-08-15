@@ -38,7 +38,12 @@
     "check:phase13": "npm run check && npm run test:e2e",
     "check:phase14": "npm run check && npm run test:e2e",
     "check:phase15": "npm run check && npm run test:e2e",
-    "check:phase16": "npm run check && npm run test:e2e"
+    "check:phase16": "npm run check && npm run test:e2e",
+    "benchmark:transfer": "node scripts/benchmark-transfer.mjs",
+    "check:bundle": "npm run build --workspace @peerlink/web && node scripts/check-bundle-size.mjs",
+    "check:phase17": "npm run check && npm run check:bundle && npm run test:e2e",
+    "audit:dependencies": "npm audit --audit-level=high",
+    "check:phase18": "npm run check && npm run check:bundle && npm run audit:dependencies && npm run test:e2e"
   },
   "engines": {
     "node": ">=22.13"

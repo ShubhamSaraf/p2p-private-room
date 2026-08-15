@@ -8,7 +8,7 @@ import type {
   ServiceHealth,
 } from "@peerlink/protocol";
 import { isServerSignalingMessage } from "@peerlink/protocol";
-import { createTurnCredentials } from "../src/worker";
+import { checkPublicApiRateLimit, createTurnCredentials } from "../src/worker";
 
 const appOrigin = "https://peerlink.shubhamsaraf.dev";
 const openSockets: WebSocket[] = [];
@@ -49,6 +49,36 @@ describe("PeerLink signaling Worker", () => {
     });
 
     expect(response.status).toBe(403);
+  });
+
+  it("rejects sensitive API calls without a browser Origin", async () => {
+    const response = await SELF.fetch("https://signaling.example/api/rooms", { method: "POST" });
+    expect(response.status).toBe(403);
+  });
+
+  it("redirects non-local HTTP requests to HTTPS", async () => {
+    const response = await SELF.fetch("http://signaling.example/health", { redirect: "manual" });
+    expect(response.status).toBe(308);
+    expect(response.headers.get("Location")).toBe("https://signaling.example/health");
+  });
+
+  it("uses the client address as the public API rate-limit key", async () => {
+    const keys: string[] = [];
+    const allowed = await checkPublicApiRateLimit(
+      new Request("https://signaling.example/api/rooms", {
+        headers: { "CF-Connecting-IP": "192.0.2.44" },
+      }),
+      {
+        PUBLIC_API_RATE_LIMITER: {
+          limit: ({ key }: { key: string }) => {
+            keys.push(key);
+            return Promise.resolve({ success: false });
+          },
+        },
+      },
+    );
+    expect(allowed).toBe(false);
+    expect(keys).toEqual(["192.0.2.44"]);
   });
 
   it("keeps TURN disabled when its Worker secret is absent", async () => {

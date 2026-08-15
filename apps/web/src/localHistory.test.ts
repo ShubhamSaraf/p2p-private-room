@@ -24,10 +24,22 @@ describe("device-local chat history", () => {
 
   it("stores messages by room and clears them on request", async () => {
     await saveRoomMessages("room-a", [
-      { type: "chat", id: "message-1", timestamp: 2, text: "local only", direction: "outgoing" },
+      {
+        type: "chat",
+        id: "9f23ce7e-1821-4b74-b60a-0d8185631d99",
+        timestamp: 2,
+        text: "local only",
+        direction: "outgoing",
+      },
     ]);
     await saveRoomMessages("room-b", [
-      { type: "chat", id: "message-2", timestamp: 1, text: "separate", direction: "incoming" },
+      {
+        type: "chat",
+        id: "c4ff781f-b160-44f9-b712-0bb056d8baf2",
+        timestamp: 1,
+        text: "separate",
+        direction: "incoming",
+      },
     ]);
     expect((await loadRoomMessages("room-a")).map((message) => message.text)).toEqual([
       "local only",

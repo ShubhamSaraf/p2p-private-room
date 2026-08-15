@@ -960,7 +960,8 @@ export class PeerRoomSession {
       throw new Error("Transfer exceeds its offered size.");
     }
     incoming.hasher.update(chunk.data);
-    incoming.chunks.push(chunk.data.slice());
+    // decodeTransferChunk already detached this data from the decrypted frame.
+    incoming.chunks.push(chunk.data);
     incoming.receivedBytes += chunk.data.length;
     incoming.nextChunk += 1;
     const now = performance.now();

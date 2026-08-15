@@ -30,6 +30,11 @@ async function routeRequest(request: Request, env: WorkerEnv): Promise<Response>
   const url = new URL(request.url);
   const corsHeaders = createCorsHeaders(request, env);
 
+  if (url.protocol !== "https:" && !isLocalHostname(url.hostname)) {
+    url.protocol = "https:";
+    return Response.redirect(url.toString(), 308);
+  }
+
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -61,6 +66,10 @@ async function routeRequest(request: Request, env: WorkerEnv): Promise<Response>
     if (!isRequestOriginAllowed(request, env)) {
       return json({ error: "Origin is not allowed" }, 403, corsHeaders);
     }
+    if (!(await checkPublicApiRateLimit(request, env))) {
+      corsHeaders.set("Retry-After", "60");
+      return json({ error: "Too many requests" }, 429, corsHeaders);
+    }
 
     const roomId = createRoomId();
     await env.ROOMS.getByName(roomId).initialize(Date.now());
@@ -71,6 +80,10 @@ async function routeRequest(request: Request, env: WorkerEnv): Promise<Response>
   if (request.method === "GET" && url.pathname === "/api/turn-credentials") {
     if (!isRequestOriginAllowed(request, env)) {
       return json({ error: "Origin is not allowed" }, 403, corsHeaders);
+    }
+    if (!(await checkPublicApiRateLimit(request, env))) {
+      corsHeaders.set("Retry-After", "60");
+      return json({ error: "Too many requests" }, 429, corsHeaders);
     }
     if (!env.TURN_SHARED_SECRET) {
       return json({ error: "TURN is not configured" }, 503, corsHeaders);
@@ -156,11 +169,11 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 export function isRequestOriginAllowed(request: Request, env: Pick<Env, "APP_ORIGIN">): boolean {
   const origin = request.headers.get("Origin");
-  if (!origin) return true;
+  if (!origin) return false;
   if (origin === env.APP_ORIGIN) return true;
 
   const requestHostname = new URL(request.url).hostname;
-  const isLocalWorker = requestHostname === "localhost" || requestHostname === "127.0.0.1";
+  const isLocalWorker = isLocalHostname(requestHostname);
   const isLocalFrontend = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
   return isLocalWorker && isLocalFrontend;
 }
@@ -170,6 +183,8 @@ export function createCorsHeaders(request: Request, env: Pick<Env, "APP_ORIGIN">
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     Vary: "Origin",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
   });
   const origin = request.headers.get("Origin");
 
@@ -178,6 +193,19 @@ export function createCorsHeaders(request: Request, env: Pick<Env, "APP_ORIGIN">
   }
 
   return headers;
+}
+
+export async function checkPublicApiRateLimit(
+  request: Request,
+  env: Pick<WorkerEnv, "PUBLIC_API_RATE_LIMITER">,
+): Promise<boolean> {
+  const clientAddress = request.headers.get("CF-Connecting-IP") ?? "local-development";
+  const result = await env.PUBLIC_API_RATE_LIMITER.limit({ key: clientAddress });
+  return result.success;
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
 function json(data: unknown, status: number, extraHeaders: Headers): Response {

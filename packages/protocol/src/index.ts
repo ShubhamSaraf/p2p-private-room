@@ -234,6 +234,7 @@ export function isTransferControlMessage(value: unknown): value is TransferContr
       typeof value.mime === "string" &&
       value.mime.length <= FILE_MIME_MAX_LENGTH &&
       (value.category === "image" || value.category === "file") &&
+      (value.category === "file" || isSupportedImageMime(value.mime)) &&
       typeof value.lastModified === "number" &&
       Number.isSafeInteger(value.lastModified) &&
       value.lastModified >= 0 &&
@@ -372,4 +373,8 @@ function isSafeRelativePath(value: unknown): value is string {
   }
   const segments = value.split("/");
   return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+function isSupportedImageMime(value: string): boolean {
+  return ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(value);
 }
