@@ -1,6 +1,7 @@
 export const PRODUCT_NAME = "PeerLink" as const;
 export const SIGNALING_PROTOCOL_VERSION = 1 as const;
 export const ROOM_ID_LENGTH = 32 as const;
+export const CHAT_MESSAGE_MAX_LENGTH = 2_000 as const;
 
 export type PeerRole = "initiator" | "responder";
 
@@ -18,6 +19,13 @@ export type IceCandidateMessage = {
 };
 
 export type ClientSignalingMessage = SessionDescriptionMessage | IceCandidateMessage;
+
+export type ChatMessage = {
+  type: "chat";
+  id: string;
+  timestamp: number;
+  text: string;
+};
 
 export type ServerSignalingMessage =
   | { type: "room-joined"; role: PeerRole; peerCount: 1 | 2 }
@@ -62,6 +70,21 @@ export function isClientSignalingMessage(value: unknown): value is ClientSignali
   return false;
 }
 
+export function isChatMessage(value: unknown): value is ChatMessage {
+  return (
+    isRecord(value) &&
+    value.type === "chat" &&
+    typeof value.id === "string" &&
+    isUuid(value.id) &&
+    typeof value.timestamp === "number" &&
+    Number.isSafeInteger(value.timestamp) &&
+    value.timestamp > 0 &&
+    typeof value.text === "string" &&
+    value.text.trim().length > 0 &&
+    value.text.length <= CHAT_MESSAGE_MAX_LENGTH
+  );
+}
+
 export function isServerSignalingMessage(value: unknown): value is ServerSignalingMessage {
   if (isClientSignalingMessage(value)) return true;
   if (!isRecord(value) || typeof value.type !== "string") return false;
@@ -92,4 +115,8 @@ function isNullableString(value: unknown, maxLength: number): value is string | 
 
 function isNullableInteger(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isInteger(value) && value >= 0);
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }

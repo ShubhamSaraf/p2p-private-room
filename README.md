@@ -2,7 +2,7 @@
 
 PeerLink is an accountless, temporary private room for exactly two people. Cloudflare is used only to create rooms and exchange WebRTC signaling data; messages and files will travel between browsers.
 
-The project is being implemented one tested phase at a time. Phase 1 now creates two-person rooms and establishes a WebRTC control DataChannel through hibernatable WebSocket signaling. See [docs/phase-1.md](docs/phase-1.md) for its acceptance checklist and deployment instructions.
+The project is being implemented one tested phase at a time. Phase 2 adds validated, in-memory text chat over the direct WebRTC control DataChannel. Cloudflare still handles only room creation and WebRTC signaling. See [docs/phase-2.md](docs/phase-2.md) for its acceptance checklist and deployment instructions.
 
 ## Requirements
 
@@ -30,6 +30,7 @@ Open `http://localhost:5173`. The page calls the Worker health endpoint at `http
 ```bash
 npm run check
 npm run check:phase1
+npm run check:phase2
 npm run build
 npm run test
 npm run lint
@@ -43,4 +44,4 @@ npm run format
 - `packages/protocol` — types and constants shared by both applications.
 - `docs` — phase records and operator instructions.
 
-The signaling service forwards only SDP and ICE negotiation messages. Application messages and files must never be sent to or stored by it.
+The signaling service forwards only SDP and ICE negotiation messages. Chat messages travel directly between browsers and are never sent to or stored by the Worker.

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("two browser pages establish the PeerLink control DataChannel", async ({ context, page }) => {
+test("two browser pages connect and exchange direct chat messages", async ({ context, page }) => {
   await page.goto("/");
   await expect(page.getByText("Signaling service").locator("..")).toContainText("Connected");
 
@@ -20,6 +20,20 @@ test("two browser pages establish the PeerLink control DataChannel", async ({ co
   await expect(peerPage.getByText("Peer connected", { exact: true })).toBeVisible();
   await expect(page.getByText("DataChannel open", { exact: true })).toBeVisible();
   await expect(peerPage.getByText("DataChannel open", { exact: true })).toBeVisible();
+
+  await page
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("Hello from the initiator");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Hello from the initiator", { exact: true })).toBeVisible();
+  await expect(peerPage.getByText("Hello from the initiator", { exact: true })).toBeVisible();
+
+  await peerPage
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("Hello from the responder");
+  await peerPage.getByRole("button", { name: "Send" }).click();
+  await expect(peerPage.getByText("Hello from the responder", { exact: true })).toBeVisible();
+  await expect(page.getByText("Hello from the responder", { exact: true })).toBeVisible();
 
   const thirdPage = await context.newPage();
   await thirdPage.goto(inviteUrl);

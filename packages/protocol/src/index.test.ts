@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CHAT_MESSAGE_MAX_LENGTH,
   PRODUCT_NAME,
   SIGNALING_PROTOCOL_VERSION,
+  isChatMessage,
   isClientSignalingMessage,
   isRoomId,
   isServerSignalingMessage,
@@ -39,6 +41,23 @@ describe("shared protocol", () => {
       true,
     );
     expect(isServerSignalingMessage({ type: "room-joined", role: "owner", peerCount: 3 })).toBe(
+      false,
+    );
+  });
+
+  it("validates bounded chat messages with IDs and timestamps", () => {
+    const message = {
+      type: "chat",
+      id: "9f23ce7e-1821-4b74-b60a-0d8185631d99",
+      timestamp: 1_723_456_789_000,
+      text: "Hello from PeerLink",
+    };
+
+    expect(isChatMessage(message)).toBe(true);
+    expect(isChatMessage({ ...message, id: "not-a-uuid" })).toBe(false);
+    expect(isChatMessage({ ...message, timestamp: Number.NaN })).toBe(false);
+    expect(isChatMessage({ ...message, text: "   " })).toBe(false);
+    expect(isChatMessage({ ...message, text: "x".repeat(CHAT_MESSAGE_MAX_LENGTH + 1) })).toBe(
       false,
     );
   });

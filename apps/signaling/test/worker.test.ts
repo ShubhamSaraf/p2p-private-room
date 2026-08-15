@@ -73,6 +73,21 @@ describe("PeerLink signaling Worker", () => {
     first.send(JSON.stringify(offer));
     expect(await forwardedOffer).toEqual(offer);
 
+    const rejectedChat = nextMessage(first);
+    first.send(
+      JSON.stringify({
+        type: "chat",
+        id: "9f23ce7e-1821-4b74-b60a-0d8185631d99",
+        timestamp: 1_723_456_789_000,
+        text: "This must not pass through signaling",
+      }),
+    );
+    expect(await rejectedChat).toEqual({
+      type: "error",
+      code: "invalid-signal",
+      message: "Invalid signaling message.",
+    });
+
     const thirdResponse = await SELF.fetch(roomSocketUrl(roomId), {
       headers: { Upgrade: "websocket", Origin: appOrigin },
     });

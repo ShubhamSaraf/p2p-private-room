@@ -3,13 +3,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 
+const { sendChatMessage } = vi.hoisted(() => ({
+  sendChatMessage: vi.fn(() => ({ ok: true as const })),
+}));
+
 vi.mock("./webrtc/usePeerRoom", () => ({
   usePeerRoom: () => ({
     phase: "connected",
     role: "initiator",
     peerConnection: "connected",
     dataChannel: "open",
+    messages: [
+      {
+        type: "chat",
+        id: "9f23ce7e-1821-4b74-b60a-0d8185631d99",
+        timestamp: 1_723_456_789_000,
+        text: "A message from the peer",
+        direction: "incoming",
+      },
+    ],
+    chatError: null,
     error: null,
+    sendChatMessage,
   }),
 }));
 
@@ -17,6 +32,7 @@ const roomId = "A7_k92LmPq4VX8nBz0RtUvWxY1234567";
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/");
+  sendChatMessage.mockClear();
 });
 
 afterEach(() => {
@@ -59,5 +75,17 @@ describe("App", () => {
     expect(screen.getByText("Peer connected")).toBeInTheDocument();
     expect(screen.getByText("DataChannel open")).toBeInTheDocument();
     expect(screen.getByText("initiator")).toBeInTheDocument();
+    expect(screen.getByText("A message from the peer")).toBeInTheDocument();
+  });
+
+  it("submits chat text through the peer-room controller", () => {
+    window.history.replaceState(null, "", `/r/${roomId}`);
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Hello there" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(sendChatMessage).toHaveBeenCalledWith("Hello there");
+    expect(screen.getByLabelText("Message")).toHaveValue("");
   });
 });
