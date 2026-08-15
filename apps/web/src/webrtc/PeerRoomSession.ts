@@ -15,6 +15,7 @@ import {
   isChatMessage,
   isApplicationMessage,
   isServerSignalingMessage,
+  isTurnCredentials,
 } from "@peerlink/protocol";
 import {
   PAKE_CONFIRMATION_BYTES,
@@ -48,11 +49,16 @@ export type RoomPhase =
 export type AuthenticationPhase =
   "waiting-for-peer" | "required" | "authenticating" | "verified" | "failed";
 
+export type ConnectionPath = "unknown" | "direct" | "relay";
+export type TurnAvailability = "checking" | "available" | "unavailable";
+
 export type PeerRoomState = {
   phase: RoomPhase;
   role: PeerRole | null;
   peerConnection: RTCPeerConnectionState;
   dataChannel: RTCDataChannelState | "none";
+  connectionPath: ConnectionPath;
+  turnAvailability: TurnAvailability;
   authentication: AuthenticationPhase;
   authError: string | null;
   messages: ChatEntry[];
@@ -84,6 +90,8 @@ export const INITIAL_PEER_ROOM_STATE: PeerRoomState = {
   role: null,
   peerConnection: "new",
   dataChannel: "none",
+  connectionPath: "unknown",
+  turnAvailability: "checking",
   authentication: "waiting-for-peer",
   authError: null,
   messages: [],
@@ -105,6 +113,7 @@ export class PeerRoomSession {
   private state: PeerRoomState = INITIAL_PEER_ROOM_STATE;
   private socket: WebSocket | null = null;
   private peer: RTCPeerConnection | null = null;
+  private iceServers: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
   private channel: RTCDataChannel | null = null;
   private role: PeerRole | null = null;
   private pendingCandidates: IceCandidateMessage[] = [];
@@ -143,6 +152,33 @@ export class PeerRoomSession {
 
   connect(): void {
     this.update({ phase: "signaling", error: null });
+    void this.initializeConnection();
+  }
+
+  private async initializeConnection(): Promise<void> {
+    try {
+      const response = await fetch(`${this.signalingUrl}/api/turn-credentials`, {
+        signal: AbortSignal.timeout(4_000),
+      });
+      if (response.ok) {
+        const value: unknown = await response.json();
+        if (isTurnCredentials(value)) {
+          this.iceServers = [
+            this.iceServers[0] as RTCIceServer,
+            ...value.iceServers.map((server) => ({ ...server })),
+          ];
+          this.update({ turnAvailability: "available" });
+        } else {
+          this.update({ turnAvailability: "unavailable" });
+        }
+      } else {
+        this.update({ turnAvailability: "unavailable" });
+      }
+    } catch {
+      this.update({ turnAvailability: "unavailable" });
+    }
+    if (this.disposed) return;
+
     const socket = new WebSocket(createSocketUrl(this.signalingUrl, this.roomId));
     this.socket = socket;
 
@@ -371,9 +407,7 @@ export class PeerRoomSession {
   private ensurePeerConnection(): RTCPeerConnection {
     if (this.peer && this.peer.signalingState !== "closed") return this.peer;
 
-    const peer = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
-    });
+    const peer = new RTCPeerConnection({ iceServers: this.iceServers });
     this.peer = peer;
 
     peer.addEventListener("icecandidate", (event) => {
@@ -389,6 +423,7 @@ export class PeerRoomSession {
     });
     peer.addEventListener("connectionstatechange", () => {
       this.update({ peerConnection: peer.connectionState });
+      if (peer.connectionState === "connected") void this.detectConnectionPath(peer);
       if (peer.connectionState === "failed" || peer.connectionState === "disconnected") {
         this.update({ phase: "disconnected" });
       }
@@ -403,6 +438,46 @@ export class PeerRoomSession {
 
     this.update({ peerConnection: peer.connectionState });
     return peer;
+  }
+
+  private async detectConnectionPath(peer: RTCPeerConnection): Promise<void> {
+    try {
+      const stats = await peer.getStats();
+      let pair: Record<string, unknown> | undefined;
+      for (const report of stats.values()) {
+        const value = report as unknown as Record<string, unknown>;
+        if (
+          value.type === "candidate-pair" &&
+          (value.selected === true || (value.nominated === true && value.state === "succeeded"))
+        ) {
+          pair = value;
+          break;
+        }
+      }
+      if (!pair) {
+        for (const report of stats.values()) {
+          const value = report as unknown as Record<string, unknown>;
+          if (value.type !== "transport" || typeof value.selectedCandidatePairId !== "string") {
+            continue;
+          }
+          pair = stats.get(value.selectedCandidatePairId) as unknown as Record<string, unknown>;
+          if (pair) break;
+        }
+      }
+      if (!pair) return;
+      const local =
+        typeof pair.localCandidateId === "string"
+          ? (stats.get(pair.localCandidateId) as unknown as Record<string, unknown>)
+          : undefined;
+      const remote =
+        typeof pair.remoteCandidateId === "string"
+          ? (stats.get(pair.remoteCandidateId) as unknown as Record<string, unknown>)
+          : undefined;
+      const relayed = local?.candidateType === "relay" || remote?.candidateType === "relay";
+      this.update({ connectionPath: relayed ? "relay" : "direct" });
+    } catch {
+      this.update({ connectionPath: "unknown" });
+    }
   }
 
   private async startOffer(): Promise<void> {
@@ -944,6 +1019,7 @@ export class PeerRoomSession {
     this.update({
       peerConnection: "closed",
       dataChannel: "none",
+      connectionPath: "unknown",
       authentication: "waiting-for-peer",
       authError: null,
       messages: [],

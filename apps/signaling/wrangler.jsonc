@@ -6,6 +6,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "APP_ORIGIN": "https://peerlink.shubhamsaraf.dev",
+    "TURN_HOST": "turn.shubhamsaraf.dev",
+    "TURN_CREDENTIAL_TTL_SECONDS": "3600",
   },
   "durable_objects": {
     "bindings": [

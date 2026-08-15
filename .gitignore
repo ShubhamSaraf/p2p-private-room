@@ -5,6 +5,7 @@ playwright-report/
 test-results/
 .wrangler/
 .dev.vars
+infrastructure/coturn/turnserver.conf
 .env
 .env.local
 .env.*.local

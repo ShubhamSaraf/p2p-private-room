@@ -1,3 +1,2 @@
-# Use .dev.vars only for local secrets added in later phases.
-# Phase 0 has no secret Worker variables.
-
+# Optional locally. Use the same high-entropy value as coturn's static-auth-secret.
+TURN_SHARED_SECRET="replace-with-a-random-secret"

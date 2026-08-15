@@ -8,6 +8,7 @@ import type {
   ServiceHealth,
 } from "@peerlink/protocol";
 import { isServerSignalingMessage } from "@peerlink/protocol";
+import { createTurnCredentials } from "../src/worker";
 
 const appOrigin = "https://peerlink.shubhamsaraf.dev";
 const openSockets: WebSocket[] = [];
@@ -48,6 +49,30 @@ describe("PeerLink signaling Worker", () => {
     });
 
     expect(response.status).toBe(403);
+  });
+
+  it("keeps TURN disabled when its Worker secret is absent", async () => {
+    const response = await SELF.fetch("https://signaling.example/api/turn-credentials", {
+      headers: { Origin: appOrigin },
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("mints short-lived coturn REST credentials", async () => {
+    const now = 1_900_000_000_000;
+    const credentials = await createTurnCredentials(
+      {
+        TURN_HOST: "turn.example.com",
+        TURN_CREDENTIAL_TTL_SECONDS: "3600",
+        TURN_SHARED_SECRET: "test-only-shared-secret",
+      },
+      now,
+    );
+    expect(credentials.expiresAt).toBe(now + 3_600_000);
+    expect(credentials.iceServers[0]?.urls).toContain("turn:turn.example.com:3478?transport=udp");
+    expect(credentials.iceServers[0]?.username).toMatch(/^1900003600:/);
+    expect(credentials.iceServers[0]?.credential).toMatch(/^[A-Za-z0-9+/]+=*$/);
   });
 
   it("connects two peers, forwards signals, and rejects a third", async () => {

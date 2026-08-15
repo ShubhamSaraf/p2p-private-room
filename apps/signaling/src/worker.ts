@@ -3,12 +3,15 @@ import {
   SIGNALING_PROTOCOL_VERSION,
   type RoomCreated,
   type ServiceHealth,
+  type TurnCredentials,
   isRoomId,
 } from "@peerlink/protocol";
 
 export { Room } from "./room";
 
-export async function handleRequest(request: Request, env: Env): Promise<Response> {
+type WorkerEnv = Env & { TURN_SHARED_SECRET?: string };
+
+export async function handleRequest(request: Request, env: WorkerEnv): Promise<Response> {
   try {
     return await routeRequest(request, env);
   } catch (error) {
@@ -23,7 +26,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   }
 }
 
-async function routeRequest(request: Request, env: Env): Promise<Response> {
+async function routeRequest(request: Request, env: WorkerEnv): Promise<Response> {
   const url = new URL(request.url);
   const corsHeaders = createCorsHeaders(request, env);
 
@@ -64,6 +67,16 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
     return json(room, 201, corsHeaders);
   }
 
+  if (request.method === "GET" && url.pathname === "/api/turn-credentials") {
+    if (!isRequestOriginAllowed(request, env)) {
+      return json({ error: "Origin is not allowed" }, 403, corsHeaders);
+    }
+    if (!env.TURN_SHARED_SECRET) {
+      return json({ error: "TURN is not configured" }, 503, corsHeaders);
+    }
+    return json(await createTurnCredentials(env), 200, corsHeaders);
+  }
+
   const socketMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/socket$/);
   if (request.method === "GET" && socketMatch) {
     const roomId = socketMatch[1];
@@ -89,6 +102,55 @@ export function createRoomId(): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+export async function createTurnCredentials(
+  env: {
+    TURN_HOST: string;
+    TURN_CREDENTIAL_TTL_SECONDS: string;
+    TURN_SHARED_SECRET?: string;
+  },
+  now = Date.now(),
+): Promise<TurnCredentials> {
+  if (!env.TURN_SHARED_SECRET) throw new Error("TURN shared secret is not configured");
+  const ttlSeconds = Number.parseInt(env.TURN_CREDENTIAL_TTL_SECONDS, 10);
+  if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 86_400) {
+    throw new Error("TURN credential TTL must be between 60 and 86400 seconds");
+  }
+  if (!/^[a-z0-9.-]+$/i.test(env.TURN_HOST)) throw new Error("TURN host is invalid");
+
+  const expiresAt = now + ttlSeconds * 1_000;
+  const username = `${Math.floor(expiresAt / 1_000)}:${crypto.randomUUID()}`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.TURN_SHARED_SECRET),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(username));
+  const credential = bytesToBase64(new Uint8Array(signature));
+
+  return {
+    iceServers: [
+      {
+        urls: [
+          `turn:${env.TURN_HOST}:3478?transport=udp`,
+          `turn:${env.TURN_HOST}:3478?transport=tcp`,
+          `turns:${env.TURN_HOST}:5349?transport=tcp`,
+        ],
+        username,
+        credential,
+      },
+    ],
+    expiresAt,
+  };
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 export function isRequestOriginAllowed(request: Request, env: Pick<Env, "APP_ORIGIN">): boolean {

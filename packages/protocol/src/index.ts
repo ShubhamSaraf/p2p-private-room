@@ -118,8 +118,45 @@ export type ServiceHealth = {
   protocolVersion: typeof SIGNALING_PROTOCOL_VERSION;
 };
 
+export type TurnCredentials = {
+  iceServers: RTCIceServerConfig[];
+  expiresAt: number;
+};
+
+export type RTCIceServerConfig = {
+  urls: string[];
+  username: string;
+  credential: string;
+};
+
 export function isRoomId(value: string): boolean {
   return value.length === ROOM_ID_LENGTH && /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+export function isTurnCredentials(value: unknown): value is TurnCredentials {
+  if (!isRecord(value) || !Array.isArray(value.iceServers) || value.iceServers.length !== 1) {
+    return false;
+  }
+  if (
+    typeof value.expiresAt !== "number" ||
+    !Number.isSafeInteger(value.expiresAt) ||
+    value.expiresAt <= Date.now()
+  )
+    return false;
+  const server = value.iceServers[0];
+  return (
+    isRecord(server) &&
+    Array.isArray(server.urls) &&
+    server.urls.length > 0 &&
+    server.urls.length <= 4 &&
+    server.urls.every((url) => typeof url === "string" && /^turns?:/.test(url)) &&
+    typeof server.username === "string" &&
+    server.username.length > 0 &&
+    server.username.length <= 256 &&
+    typeof server.credential === "string" &&
+    server.credential.length > 0 &&
+    server.credential.length <= 256
+  );
 }
 
 export function isClientSignalingMessage(value: unknown): value is ClientSignalingMessage {

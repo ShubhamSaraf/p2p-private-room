@@ -103,12 +103,12 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
         </div>
 
         <aside className="glass-card rounded-3xl p-6 sm:p-8" aria-label="Service status">
-          <p className="text-sm font-medium text-slate-400">Phase 7 status</p>
-          <h2 className="mt-2 text-2xl font-semibold">Verified encrypted transfers</h2>
+          <p className="text-sm font-medium text-slate-400">Phase 9 status</p>
+          <h2 className="mt-2 text-2xl font-semibold">Private paths, visible status</h2>
           <dl className="mt-8 space-y-5 text-sm">
             <StatusRow label="Signaling service" value={healthLabel(health)} state={health} />
             <StatusRow label="Room capacity" value="Two peers" />
-            <StatusRow label="Connection path" value="WebRTC DataChannel" />
+            <StatusRow label="Connection path" value="Direct WebRTC or TURN relay" />
             <StatusRow label="Message validation" value="Enabled" />
             <StatusRow label="Peer authentication" value="CPace PAKE (beta)" />
             <StatusRow label="Application encryption" value="AES-256-GCM" />
@@ -281,6 +281,11 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                   }
                 />
                 <ConnectionRow
+                  label="Connection path"
+                  connected={state.connectionPath !== "unknown"}
+                  value={connectionPathLabel(state.connectionPath)}
+                />
+                <ConnectionRow
                   label="Control channel"
                   connected={state.dataChannel === "open"}
                   value={
@@ -300,6 +305,12 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                   value={state.authentication === "verified" ? "AES-256-GCM active" : "Locked"}
                 />
                 <ConnectionRow label="STUN" connected value="Cloudflare" />
+                <ConnectionRow
+                  label="TURN fallback"
+                  connected={state.turnAvailability === "available"}
+                  value={turnAvailabilityLabel(state.turnAvailability)}
+                />
+                <ConnectionRow label="Server content storage" connected value="None" />
               </dl>
               <button
                 className="mt-8 text-sm text-slate-400 underline underline-offset-4 hover:text-slate-200"
@@ -622,7 +633,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
             {PRODUCT_NAME}
           </a>
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-            Phase 7
+            Phase 9
           </span>
         </header>
         {children}
@@ -883,6 +894,18 @@ function roomStatusDescription(phase: string): string {
 
 function formatState(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function connectionPathLabel(path: string): string {
+  if (path === "relay") return "TURN relay";
+  if (path === "direct") return "Direct peer-to-peer";
+  return "Detecting";
+}
+
+function turnAvailabilityLabel(availability: string): string {
+  if (availability === "available") return "Ready";
+  if (availability === "unavailable") return "Not configured";
+  return "Checking";
 }
 
 function authenticationLabel(authentication: string, authError: string | null): string {

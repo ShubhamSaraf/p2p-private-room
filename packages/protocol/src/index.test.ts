@@ -15,6 +15,7 @@ import {
   isClientSignalingMessage,
   isRoomId,
   isServerSignalingMessage,
+  isTurnCredentials,
 } from "./index";
 
 describe("shared protocol", () => {
@@ -133,5 +134,29 @@ describe("shared protocol", () => {
         sha256: "a".repeat(64),
       }),
     ).toBe(true);
+  });
+});
+
+describe("TURN credentials", () => {
+  it("accepts only expiring TURN server credentials", () => {
+    expect(
+      isTurnCredentials({
+        iceServers: [
+          {
+            urls: ["turn:turn.example.com:3478?transport=udp", "turns:turn.example.com:5349"],
+            username: "2000000000:browser-id",
+            credential: "signed-value",
+          },
+        ],
+        expiresAt: Date.now() + 60_000,
+      }),
+    ).toBe(true);
+    expect(isTurnCredentials({ iceServers: [], expiresAt: Date.now() + 60_000 })).toBe(false);
+    expect(
+      isTurnCredentials({
+        iceServers: [{ urls: ["https://example.com"], username: "u", credential: "c" }],
+        expiresAt: Date.now() + 60_000,
+      }),
+    ).toBe(false);
   });
 });
