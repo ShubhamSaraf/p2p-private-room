@@ -26,8 +26,16 @@ jobs:
         run: npm run lint
       - name: Type-check
         run: npm run typecheck
-      - name: Run unit tests
-        run: npm run test
+      - name: Test protocol
+        run: npm run test --workspace @peerlink/protocol
+      - name: Test crypto
+        run: npm run test --workspace @peerlink/crypto
+      - name: Test transfer
+        run: npm run test --workspace @peerlink/transfer
+      - name: Test web
+        run: npm run test --workspace @peerlink/web
+      - name: Test signaling
+        run: npm run test --workspace @peerlink/signaling
       - name: Build workspaces
         run: npm run build
       - name: Check bundle budgets
