@@ -182,6 +182,9 @@ test("room controls stay within a mobile viewport", async ({ page }) => {
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(widths.viewport);
   }
+
+  const connectionBounds = await connectionPanel.boundingBox();
+  expect(connectionBounds!.height).toBeLessThan(600);
 });
 
 test("different shared secrets keep direct chat locked", async ({ context, page }) => {

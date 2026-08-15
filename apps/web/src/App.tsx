@@ -453,9 +453,12 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
               ) : null}
             </section>
 
-            <aside className="glass-card min-w-0 rounded-3xl p-7" aria-label="Connection status">
+            <aside
+              className="glass-card min-w-0 rounded-3xl p-5 sm:p-7"
+              aria-label="Connection status"
+            >
               <p className="text-sm font-medium text-slate-400">Connection status</p>
-              <dl className="mt-7 space-y-5 text-sm">
+              <dl className="mt-5 text-sm">
                 <ConnectionRow
                   label="Signaling"
                   connected={state.role !== null}
@@ -507,7 +510,7 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                 />
                 <ConnectionRow label="Server content storage" connected value="None" />
               </dl>
-              <div className="mt-8 flex flex-wrap gap-x-5 gap-y-3">
+              <div className="mt-6 flex flex-wrap gap-x-5 gap-y-3">
                 <button
                   className="text-sm text-slate-400 underline underline-offset-4 hover:text-slate-200"
                   onClick={onLeave}
@@ -1213,9 +1216,9 @@ function ConnectionRow({
   connected: boolean;
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-2 border-b border-white/8 pb-5 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-      <dt className="text-slate-400">{label}</dt>
-      <dd className="flex min-w-0 items-center gap-2 break-words font-medium sm:max-w-[60%] sm:justify-end sm:text-right">
+    <div className="grid min-w-0 grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] items-center gap-3 border-b border-white/8 py-3 first:pt-0 last:border-0 last:pb-0">
+      <dt className="min-w-0 text-slate-400">{label}</dt>
+      <dd className="flex min-w-0 items-center justify-end gap-2 break-words text-right font-medium">
         <StatusDot active={connected} />
         {value}
       </dd>
