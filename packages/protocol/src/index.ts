@@ -3,6 +3,8 @@ export const SIGNALING_PROTOCOL_VERSION = 1 as const;
 export const ROOM_ID_LENGTH = 32 as const;
 export const CHAT_MESSAGE_MAX_LENGTH = 2_000 as const;
 export const AUTH_PROTOCOL_VERSION = 1 as const;
+export const ENCRYPTION_PROTOCOL_VERSION = 1 as const;
+export const ENCRYPTED_CONTROL_MAX_LENGTH = 87_404 as const;
 
 export type PeerRole = "initiator" | "responder";
 
@@ -42,7 +44,15 @@ export type PakeConfirmationMessage = {
 };
 
 export type AuthenticationMessage = PakeShareMessage | PakeConfirmationMessage;
-export type ControlMessage = ChatMessage | AuthenticationMessage;
+
+export type EncryptedControlMessage = {
+  type: "encrypted";
+  version: typeof ENCRYPTION_PROTOCOL_VERSION;
+  counter: string;
+  ciphertext: string;
+};
+
+export type ControlMessage = AuthenticationMessage | EncryptedControlMessage;
 
 export type ServerSignalingMessage =
   | { type: "room-joined"; role: PeerRole; peerCount: 1 | 2 }
@@ -117,7 +127,21 @@ export function isAuthenticationMessage(value: unknown): value is Authentication
 }
 
 export function isControlMessage(value: unknown): value is ControlMessage {
-  return isChatMessage(value) || isAuthenticationMessage(value);
+  return isAuthenticationMessage(value) || isEncryptedControlMessage(value);
+}
+
+export function isEncryptedControlMessage(value: unknown): value is EncryptedControlMessage {
+  return (
+    isRecord(value) &&
+    value.type === "encrypted" &&
+    value.version === ENCRYPTION_PROTOCOL_VERSION &&
+    typeof value.counter === "string" &&
+    /^(0|[1-9][0-9]{0,19})$/.test(value.counter) &&
+    typeof value.ciphertext === "string" &&
+    value.ciphertext.length >= 22 &&
+    value.ciphertext.length <= ENCRYPTED_CONTROL_MAX_LENGTH &&
+    /^[A-Za-z0-9_-]+$/.test(value.ciphertext)
+  );
 }
 
 export function isServerSignalingMessage(value: unknown): value is ServerSignalingMessage {

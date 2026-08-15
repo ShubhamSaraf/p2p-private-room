@@ -23,7 +23,8 @@
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
     "check:phase1": "npm run check && npm run test:e2e",
     "check:phase2": "npm run check && npm run test:e2e",
-    "check:phase3": "npm run check && npm run test:e2e"
+    "check:phase3": "npm run check && npm run test:e2e",
+    "check:phase4": "npm run check && npm run test:e2e"
   },
   "engines": {
     "node": ">=22.13"

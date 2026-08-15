@@ -102,14 +102,15 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
         </div>
 
         <aside className="glass-card rounded-3xl p-6 sm:p-8" aria-label="Service status">
-          <p className="text-sm font-medium text-slate-400">Phase 3 status</p>
-          <h2 className="mt-2 text-2xl font-semibold">Shared-secret authentication</h2>
+          <p className="text-sm font-medium text-slate-400">Phase 4 status</p>
+          <h2 className="mt-2 text-2xl font-semibold">Encrypted private chat</h2>
           <dl className="mt-8 space-y-5 text-sm">
             <StatusRow label="Signaling service" value={healthLabel(health)} state={health} />
             <StatusRow label="Room capacity" value="Two peers" />
             <StatusRow label="Connection path" value="WebRTC DataChannel" />
             <StatusRow label="Message validation" value="Enabled" />
             <StatusRow label="Peer authentication" value="CPace PAKE (beta)" />
+            <StatusRow label="Application encryption" value="AES-256-GCM" />
             <StatusRow label="Content stored on server" value="None" />
           </dl>
         </aside>
@@ -228,6 +229,11 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                   connected={state.authentication === "verified"}
                   value={authenticationLabel(state.authentication, state.authError)}
                 />
+                <ConnectionRow
+                  label="Application encryption"
+                  connected={state.authentication === "verified"}
+                  value={state.authentication === "verified" ? "AES-256-GCM active" : "Locked"}
+                />
                 <ConnectionRow label="STUN" connected value="Cloudflare" />
               </dl>
               <button
@@ -308,7 +314,9 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
           <section className="glass-card overflow-hidden rounded-3xl" aria-label="Direct chat">
             <div className="border-b border-white/10 px-6 py-5 sm:px-8">
               <p className="text-sm font-medium text-slate-400">Direct chat</p>
-              <h2 className="mt-1 text-xl font-semibold">Messages stay between these browsers</h2>
+              <h2 className="mt-1 text-xl font-semibold">
+                Messages are encrypted before WebRTC sends them
+              </h2>
             </div>
 
             <ol
@@ -383,7 +391,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
             {PRODUCT_NAME}
           </a>
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-            Phase 3
+            Phase 4
           </span>
         </header>
         {children}

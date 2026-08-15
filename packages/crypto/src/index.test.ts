@@ -5,6 +5,7 @@ import {
   PAKE_SESSION_ID_BYTES,
   destroyPakeResult,
   destroyPakeState,
+  deriveApplicationCipher,
   finishPake,
   startPake,
   validateSharedSecret,
@@ -83,5 +84,42 @@ describe("PeerLink CPace authentication", () => {
   it("validates shared-secret length without retaining it", () => {
     expect(validateSharedSecret("short")).toBe("Use at least 6 characters.");
     expect(validateSharedSecret("sixsix")).toBeNull();
+  });
+});
+
+describe("PeerLink application encryption", () => {
+  it("derives directional keys and exchanges encrypted messages", () => {
+    const sessionKey = crypto.getRandomValues(new Uint8Array(64));
+    const initiator = deriveApplicationCipher({ sessionKey, channelId, role: "initiator" });
+    const responder = deriveApplicationCipher({ sessionKey, channelId, role: "responder" });
+    const plaintext = new TextEncoder().encode("not visible on the DataChannel");
+
+    const first = initiator.encrypt(plaintext);
+    expect(new TextDecoder().decode(first.ciphertext)).not.toContain("not visible");
+    expect(responder.decrypt(first)).toEqual(plaintext);
+
+    const reply = responder.encrypt(new TextEncoder().encode("encrypted reply"));
+    expect(new TextDecoder().decode(initiator.decrypt(reply))).toBe("encrypted reply");
+
+    initiator.destroy();
+    responder.destroy();
+    sessionKey.fill(0);
+  });
+
+  it("rejects tampering and replayed counters", () => {
+    const sessionKey = crypto.getRandomValues(new Uint8Array(64));
+    const initiator = deriveApplicationCipher({ sessionKey, channelId, role: "initiator" });
+    const responder = deriveApplicationCipher({ sessionKey, channelId, role: "responder" });
+    const payload = initiator.encrypt(new TextEncoder().encode("authenticated"));
+    const tampered = { ...payload, ciphertext: payload.ciphertext.slice() };
+    tampered.ciphertext[0] = (tampered.ciphertext[0] ?? 0) ^ 1;
+
+    expect(() => responder.decrypt(tampered)).toThrow();
+    expect(responder.decrypt(payload)).toEqual(new TextEncoder().encode("authenticated"));
+    expect(() => responder.decrypt(payload)).toThrow(/repeated/);
+
+    initiator.destroy();
+    responder.destroy();
+    sessionKey.fill(0);
   });
 });

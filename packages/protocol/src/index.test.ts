@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CHAT_MESSAGE_MAX_LENGTH,
   AUTH_PROTOCOL_VERSION,
+  CHAT_MESSAGE_MAX_LENGTH,
+  ENCRYPTION_PROTOCOL_VERSION,
   PRODUCT_NAME,
   SIGNALING_PROTOCOL_VERSION,
   isChatMessage,
   isAuthenticationMessage,
   isControlMessage,
+  isEncryptedControlMessage,
   isClientSignalingMessage,
   isRoomId,
   isServerSignalingMessage,
@@ -45,6 +47,27 @@ describe("shared protocol", () => {
     expect(isRoomId("A7_k92LmPq4VX8nBz0RtUvWxY1234567")).toBe(true);
     expect(isRoomId("short-room")).toBe(false);
     expect(isRoomId("A7/k92LmPq4VX8nBz0RtUvWxY1234567")).toBe(false);
+  });
+
+  it("accepts encrypted envelopes and excludes plaintext chat from control frames", () => {
+    const encrypted = {
+      type: "encrypted",
+      version: ENCRYPTION_PROTOCOL_VERSION,
+      counter: "0",
+      ciphertext: "A".repeat(22),
+    };
+    const chat = {
+      type: "chat",
+      id: "9f23ce7e-1821-4b74-b60a-0d8185631d99",
+      timestamp: 1_723_456_789_000,
+      text: "plaintext",
+    };
+
+    expect(isEncryptedControlMessage(encrypted)).toBe(true);
+    expect(isControlMessage(encrypted)).toBe(true);
+    expect(isControlMessage(chat)).toBe(false);
+    expect(isEncryptedControlMessage({ ...encrypted, counter: "00" })).toBe(false);
+    expect(isEncryptedControlMessage({ ...encrypted, ciphertext: "not+url/safe" })).toBe(false);
   });
 
   it("validates SDP and ICE messages", () => {

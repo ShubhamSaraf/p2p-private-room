@@ -1,12 +1,20 @@
 import { ristretto255 } from "@cipherman/pake-js/cpace";
+import { gcm } from "@noble/ciphers/aes.js";
 import { equalBytes } from "@noble/curves/utils";
+import { hkdf } from "@noble/hashes/hkdf";
 import { hmac } from "@noble/hashes/hmac";
+import { sha256 } from "@noble/hashes/sha256";
 import { sha512 } from "@noble/hashes/sha512";
 
 const encoder = new TextEncoder();
 const CPACE_MAC_LABEL = encoder.encode("CPaceMac");
 const INITIATOR_AD = encoder.encode("peerlink/auth/v1/initiator");
 const RESPONDER_AD = encoder.encode("peerlink/auth/v1/responder");
+const APPLICATION_KEY_INFO = encoder.encode("peerlink/application-encryption/v1");
+const APPLICATION_AAD = encoder.encode("peerlink/encrypted-control/v1");
+const AES_KEY_BYTES = 32;
+const AES_GCM_NONCE_BYTES = 12;
+const MAX_COUNTER = (1n << 64n) - 1n;
 
 export const PAKE_SUITE = ristretto255.SUITE_NAME;
 export const PAKE_SESSION_ID_BYTES = 32;
@@ -30,6 +38,87 @@ export type PakeResult = {
   confirmationKey: Uint8Array;
   peerConfirmationData: Uint8Array;
 };
+
+export type EncryptedPayload = {
+  counter: string;
+  ciphertext: Uint8Array;
+};
+
+export class ApplicationCipher {
+  private sendCounter = 0n;
+  private receiveCounter = 0n;
+  private destroyed = false;
+
+  constructor(
+    private readonly sendKey: Uint8Array,
+    private readonly receiveKey: Uint8Array,
+  ) {
+    if (sendKey.length !== AES_KEY_BYTES || receiveKey.length !== AES_KEY_BYTES) {
+      throw new Error("Application encryption requires two AES-256 keys.");
+    }
+  }
+
+  encrypt(plaintext: Uint8Array): EncryptedPayload {
+    this.assertUsable();
+    if (this.sendCounter > MAX_COUNTER) throw new Error("Application send counter exhausted.");
+    const counter = this.sendCounter;
+    const nonce = counterNonce(counter);
+    const ciphertext = gcm(this.sendKey, nonce, applicationAad(nonce)).encrypt(plaintext);
+    this.sendCounter += 1n;
+    return { counter: counter.toString(10), ciphertext };
+  }
+
+  decrypt(payload: EncryptedPayload): Uint8Array {
+    this.assertUsable();
+    const counter = parseCounter(payload.counter);
+    if (counter !== this.receiveCounter) {
+      throw new Error("Encrypted control message is missing, repeated, or out of order.");
+    }
+    const nonce = counterNonce(counter);
+    const plaintext = gcm(this.receiveKey, nonce, applicationAad(nonce)).decrypt(
+      payload.ciphertext,
+    );
+    this.receiveCounter += 1n;
+    return plaintext;
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.sendKey.fill(0);
+    this.receiveKey.fill(0);
+    this.destroyed = true;
+  }
+
+  private assertUsable(): void {
+    if (this.destroyed) throw new Error("Application encryption keys were destroyed.");
+  }
+}
+
+export function deriveApplicationCipher(options: {
+  sessionKey: Uint8Array;
+  channelId: Uint8Array;
+  role: PakeRole;
+}): ApplicationCipher {
+  if (options.sessionKey.length < 32) throw new Error("PAKE session key is too short.");
+  if (options.channelId.length === 0) throw new Error("Application channel binding is required.");
+
+  const salt = sha256(options.channelId);
+  const keyMaterial = hkdf(
+    sha256,
+    options.sessionKey,
+    salt,
+    APPLICATION_KEY_INFO,
+    AES_KEY_BYTES * 2,
+  );
+  salt.fill(0);
+  const initiatorKey = keyMaterial.slice(0, AES_KEY_BYTES);
+  const responderKey = keyMaterial.slice(AES_KEY_BYTES);
+  keyMaterial.fill(0);
+
+  return options.role === "initiator"
+    ? new ApplicationCipher(initiatorKey, responderKey)
+    : new ApplicationCipher(responderKey, initiatorKey);
+}
 
 export function validateSharedSecret(secret: string): string | null {
   const normalized = normalizeSharedSecret(secret);
@@ -165,4 +254,21 @@ function concatBytes(...values: Uint8Array[]): Uint8Array {
     offset += value.length;
   }
   return output;
+}
+
+function parseCounter(value: string): bigint {
+  if (!/^(0|[1-9][0-9]{0,19})$/.test(value)) throw new Error("Invalid encryption counter.");
+  const counter = BigInt(value);
+  if (counter > MAX_COUNTER) throw new Error("Encryption counter is out of range.");
+  return counter;
+}
+
+function counterNonce(counter: bigint): Uint8Array {
+  const nonce = new Uint8Array(AES_GCM_NONCE_BYTES);
+  new DataView(nonce.buffer).setBigUint64(4, counter, false);
+  return nonce;
+}
+
+function applicationAad(nonce: Uint8Array): Uint8Array {
+  return concatBytes(APPLICATION_AAD, nonce);
 }

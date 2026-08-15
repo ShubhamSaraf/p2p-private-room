@@ -1,6 +1,7 @@
 import {
   AUTH_PROTOCOL_VERSION,
   CHAT_MESSAGE_MAX_LENGTH,
+  ENCRYPTION_PROTOCOL_VERSION,
   type AuthenticationMessage,
   type ChatMessage,
   type ClientSignalingMessage,
@@ -8,12 +9,15 @@ import {
   type PeerRole,
   type ServerSignalingMessage,
   isControlMessage,
+  isChatMessage,
   isServerSignalingMessage,
 } from "@peerlink/protocol";
 import {
   PAKE_CONFIRMATION_BYTES,
   PAKE_SESSION_ID_BYTES,
   PAKE_SHARE_BYTES,
+  ApplicationCipher,
+  deriveApplicationCipher,
   destroyPakeResult,
   destroyPakeState,
   finishPake,
@@ -89,6 +93,7 @@ export class PeerRoomSession {
   private pendingPeerConfirmation: Uint8Array | null = null;
   private pakeState: PakeState | null = null;
   private pakeResult: PakeResult | null = null;
+  private applicationCipher: ApplicationCipher | null = null;
   private authSessionId: string | null = null;
   private disposed = false;
 
@@ -156,7 +161,7 @@ export class PeerRoomSession {
     };
 
     try {
-      this.channel.send(JSON.stringify(message));
+      this.sendEncryptedControl(message);
       this.seenChatMessageIds.add(message.id);
       this.appendMessage({ ...message, direction: "outgoing" });
       return { ok: true };
@@ -402,6 +407,10 @@ export class PeerRoomSession {
       return;
     }
 
+    if (isChatMessage(value)) {
+      this.update({ chatError: "The peer sent a forbidden plaintext chat message." });
+      return;
+    }
     if (!isControlMessage(value)) {
       this.update({ chatError: "The peer sent an invalid control message." });
       return;
@@ -415,14 +424,29 @@ export class PeerRoomSession {
       await this.receivePakeConfirmation(decodeBase64Url(value.confirmation));
       return;
     }
-    if (this.state.authentication !== "verified") {
-      this.update({ chatError: "The peer tried to send a message before authentication." });
+    if (this.state.authentication !== "verified" || !this.applicationCipher) {
+      this.update({ chatError: "The peer sent encrypted data before authentication." });
       return;
     }
-    if (this.seenChatMessageIds.has(value.id)) return;
 
-    this.seenChatMessageIds.add(value.id);
-    this.appendMessage({ ...value, direction: "incoming" });
+    const plaintext = this.applicationCipher.decrypt({
+      counter: value.counter,
+      ciphertext: decodeBase64Url(value.ciphertext),
+    });
+    let applicationMessage: unknown;
+    try {
+      applicationMessage = JSON.parse(new TextDecoder().decode(plaintext));
+    } finally {
+      plaintext.fill(0);
+    }
+    if (!isChatMessage(applicationMessage)) {
+      this.update({ chatError: "The peer sent an invalid encrypted application message." });
+      return;
+    }
+    if (this.seenChatMessageIds.has(applicationMessage.id)) return;
+
+    this.seenChatMessageIds.add(applicationMessage.id);
+    this.appendMessage({ ...applicationMessage, direction: "incoming" });
   }
 
   private async receivePakeShare(
@@ -509,7 +533,34 @@ export class PeerRoomSession {
       this.failAuthentication("Shared secrets do not match. Start a new room to try again.");
       return;
     }
+    this.applicationCipher = deriveApplicationCipher({
+      sessionKey: this.pakeResult.sessionKey,
+      channelId: this.channelId(),
+      role: this.role ?? "initiator",
+    });
+    destroyPakeResult(this.pakeResult);
+    this.pakeResult = null;
     this.update({ authentication: "verified", authError: null, chatError: null });
+  }
+
+  private sendEncryptedControl(message: ChatMessage): void {
+    if (!this.channel || this.channel.readyState !== "open" || !this.applicationCipher) {
+      throw new Error("Application encryption is not active.");
+    }
+    const plaintext = new TextEncoder().encode(JSON.stringify(message));
+    try {
+      const encrypted = this.applicationCipher.encrypt(plaintext);
+      this.channel.send(
+        JSON.stringify({
+          type: "encrypted",
+          version: ENCRYPTION_PROTOCOL_VERSION,
+          counter: encrypted.counter,
+          ciphertext: encodeBase64Url(encrypted.ciphertext),
+        }),
+      );
+    } finally {
+      plaintext.fill(0);
+    }
   }
 
   private sendControl(message: AuthenticationMessage): void {
@@ -529,6 +580,8 @@ export class PeerRoomSession {
     destroyPakeResult(this.pakeResult);
     this.pakeState = null;
     this.pakeResult = null;
+    this.applicationCipher?.destroy();
+    this.applicationCipher = null;
     this.pendingPeerConfirmation?.fill(0);
     this.pendingPeerConfirmation = null;
     this.update({ authentication: "failed", authError: message });
@@ -551,6 +604,8 @@ export class PeerRoomSession {
     destroyPakeResult(this.pakeResult);
     this.pakeState = null;
     this.pakeResult = null;
+    this.applicationCipher?.destroy();
+    this.applicationCipher = null;
     this.authSessionId = null;
     this.channel?.close();
     this.peer?.close();

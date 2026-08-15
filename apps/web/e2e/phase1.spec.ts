@@ -1,6 +1,18 @@
 import { expect, test } from "@playwright/test";
 
 test("two browser pages connect and exchange direct chat messages", async ({ context, page }) => {
+  await context.addInitScript(() => {
+    const sentFrames: string[] = [];
+    Object.defineProperty(window, "__peerLinkSentFrames", { value: sentFrames });
+    const originalSend = RTCDataChannel.prototype.send as unknown as (
+      this: RTCDataChannel,
+      data: string | ArrayBuffer | ArrayBufferView | Blob,
+    ) => void;
+    RTCDataChannel.prototype.send = function (data: string | ArrayBuffer | ArrayBufferView | Blob) {
+      if (typeof data === "string") sentFrames.push(data);
+      return originalSend.call(this, data);
+    };
+  });
   await page.goto("/");
   await expect(page.getByText("Signaling service").locator("..")).toContainText("Connected");
 
@@ -37,6 +49,19 @@ test("two browser pages connect and exchange direct chat messages", async ({ con
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText("Hello from the initiator", { exact: true })).toBeVisible();
   await expect(peerPage.getByText("Hello from the initiator", { exact: true })).toBeVisible();
+
+  const initiatorFrames = await page.evaluate(
+    () => (window as unknown as { __peerLinkSentFrames: string[] }).__peerLinkSentFrames,
+  );
+  expect(initiatorFrames.some((frame) => frame.includes("Hello from the initiator"))).toBe(false);
+  expect(
+    initiatorFrames.some((frame) => {
+      const value: unknown = JSON.parse(frame);
+      return (
+        typeof value === "object" && value !== null && "type" in value && value.type === "encrypted"
+      );
+    }),
+  ).toBe(true);
 
   await peerPage
     .getByRole("textbox", { name: "Message", exact: true })

@@ -2,7 +2,7 @@
 
 PeerLink is an accountless, temporary private room for exactly two people. Cloudflare is used only to create rooms and exchange WebRTC signaling data; messages and files will travel between browsers.
 
-The project is being implemented one tested phase at a time. Phase 3 adds CPace shared-secret authentication and keeps direct chat locked until both peers prove they entered the same secret. Cloudflare still handles only room creation and WebRTC signaling. See [docs/phase-3.md](docs/phase-3.md) for its acceptance checklist, security status, and deployment instructions.
+The project is being implemented one tested phase at a time. Phase 4 adds directional AES-256-GCM application encryption after CPace authentication, so chat plaintext is never placed on the DataChannel. Cloudflare still handles only room creation and WebRTC signaling. See [docs/phase-4.md](docs/phase-4.md) for its acceptance checklist and security design.
 
 ## Requirements
 
@@ -32,6 +32,7 @@ npm run check
 npm run check:phase1
 npm run check:phase2
 npm run check:phase3
+npm run check:phase4
 npm run build
 npm run test
 npm run lint
