@@ -101,6 +101,26 @@ export function chunkCount(size: number): number {
   return Math.ceil(size / TRANSFER_CHUNK_SIZE);
 }
 
+export function isValidResumePoint(
+  fileSize: number,
+  nextChunk: number,
+  byteOffset: number,
+): boolean {
+  if (
+    !Number.isSafeInteger(fileSize) ||
+    fileSize < 0 ||
+    !Number.isSafeInteger(nextChunk) ||
+    nextChunk < 0 ||
+    !Number.isSafeInteger(byteOffset) ||
+    byteOffset < 0 ||
+    byteOffset > fileSize
+  ) {
+    return false;
+  }
+  if (byteOffset === fileSize) return nextChunk === chunkCount(fileSize);
+  return byteOffset % TRANSFER_CHUNK_SIZE === 0 && nextChunk === byteOffset / TRANSFER_CHUNK_SIZE;
+}
+
 export function createSingleFileZip(name: string, data: Uint8Array): Uint8Array {
   const baseName = name.split(/[\\/]/u).pop() || "file";
   const safeName = Array.from(baseName, (character) => {

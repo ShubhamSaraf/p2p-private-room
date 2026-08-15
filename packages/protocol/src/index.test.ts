@@ -126,6 +126,8 @@ describe("shared protocol", () => {
     expect(isTransferControlMessage(offer)).toBe(true);
     expect(isApplicationMessage(offer)).toBe(true);
     expect(isTransferControlMessage({ ...offer, name: "bad\u0000name" })).toBe(false);
+    expect(isTransferControlMessage({ ...offer, relativePath: "folder/photo.png" })).toBe(true);
+    expect(isTransferControlMessage({ ...offer, relativePath: "../photo.png" })).toBe(false);
     expect(
       isTransferControlMessage({
         type: "file-complete",
@@ -134,6 +136,23 @@ describe("shared protocol", () => {
         sha256: "a".repeat(64),
       }),
     ).toBe(true);
+    expect(isTransferControlMessage({ type: "file-pause", id: offer.id })).toBe(true);
+    expect(
+      isTransferControlMessage({
+        type: "file-resume",
+        id: offer.id,
+        nextChunk: 2,
+        byteOffset: 131_072,
+      }),
+    ).toBe(true);
+    expect(
+      isTransferControlMessage({
+        type: "file-resume",
+        id: offer.id,
+        nextChunk: -1,
+        byteOffset: 0,
+      }),
+    ).toBe(false);
   });
 });
 

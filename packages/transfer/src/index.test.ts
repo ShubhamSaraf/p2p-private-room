@@ -9,6 +9,7 @@ import {
   decodeTransferChunk,
   encodeTransferChunk,
   isProbablyCompressed,
+  isValidResumePoint,
 } from "./index";
 
 const transferId = "9f23ce7e-1821-4b74-b60a-0d8185631d99";
@@ -46,6 +47,9 @@ describe("transfer primitives", () => {
     expect(chunkCount(0)).toBe(0);
     expect(chunkCount(TRANSFER_CHUNK_SIZE)).toBe(1);
     expect(chunkCount(TRANSFER_CHUNK_SIZE + 1)).toBe(2);
+    expect(isValidResumePoint(TRANSFER_CHUNK_SIZE * 3, 2, TRANSFER_CHUNK_SIZE * 2)).toBe(true);
+    expect(isValidResumePoint(TRANSFER_CHUNK_SIZE * 3, 1, TRANSFER_CHUNK_SIZE * 2)).toBe(false);
+    expect(isValidResumePoint(TRANSFER_CHUNK_SIZE + 7, 2, TRANSFER_CHUNK_SIZE + 7)).toBe(true);
   });
 
   it("creates interoperable ZIP files and flags compressed formats", () => {

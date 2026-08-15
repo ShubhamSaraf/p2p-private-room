@@ -7,6 +7,7 @@ export const ENCRYPTION_PROTOCOL_VERSION = 1 as const;
 export const ENCRYPTED_CONTROL_MAX_LENGTH = 87_404 as const;
 export const FILE_NAME_MAX_LENGTH = 255 as const;
 export const FILE_MIME_MAX_LENGTH = 255 as const;
+export const FILE_RELATIVE_PATH_MAX_LENGTH = 1_024 as const;
 
 export type PeerRole = "initiator" | "responder";
 
@@ -40,6 +41,7 @@ export type FileOfferMessage = {
   mime: string;
   category: "image" | "file";
   lastModified: number;
+  relativePath?: string;
 };
 
 export type FileDecisionMessage = {
@@ -51,6 +53,26 @@ export type FileCancelMessage = {
   type: "file-cancel";
   id: string;
   reason: string;
+};
+
+export type FilePauseMessage = {
+  type: "file-pause";
+  id: string;
+};
+
+export type FileResumeMessage = {
+  type: "file-resume";
+  id: string;
+  nextChunk: number;
+  byteOffset: number;
+};
+
+export type FileResumeOfferMessage = {
+  type: "file-resume-offer";
+  id: string;
+  size: number;
+  nextChunk: number;
+  byteOffset: number;
 };
 
 export type FileCompleteMessage = {
@@ -70,6 +92,9 @@ export type TransferControlMessage =
   | FileOfferMessage
   | FileDecisionMessage
   | FileCancelMessage
+  | FilePauseMessage
+  | FileResumeMessage
+  | FileResumeOfferMessage
   | FileCompleteMessage
   | FileVerifiedMessage;
 
@@ -211,11 +236,26 @@ export function isTransferControlMessage(value: unknown): value is TransferContr
       (value.category === "image" || value.category === "file") &&
       typeof value.lastModified === "number" &&
       Number.isSafeInteger(value.lastModified) &&
-      value.lastModified >= 0
+      value.lastModified >= 0 &&
+      (value.relativePath === undefined || isSafeRelativePath(value.relativePath))
     );
   }
 
   if (value.type === "file-accept" || value.type === "file-decline") return true;
+  if (value.type === "file-pause") return true;
+  if (value.type === "file-resume" || value.type === "file-resume-offer") {
+    return (
+      (value.type === "file-resume" ||
+        (typeof value.size === "number" && Number.isSafeInteger(value.size) && value.size >= 0)) &&
+      typeof value.nextChunk === "number" &&
+      Number.isSafeInteger(value.nextChunk) &&
+      value.nextChunk >= 0 &&
+      value.nextChunk <= 0xffffffff &&
+      typeof value.byteOffset === "number" &&
+      Number.isSafeInteger(value.byteOffset) &&
+      value.byteOffset >= 0
+    );
+  }
   if (value.type === "file-cancel") {
     return typeof value.reason === "string" && value.reason.length <= 256;
   }
@@ -318,4 +358,18 @@ function hasControlCharacters(value: string): boolean {
     const code = character.charCodeAt(0);
     return code <= 31 || code === 127;
   });
+}
+
+function isSafeRelativePath(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > FILE_RELATIVE_PATH_MAX_LENGTH ||
+    hasControlCharacters(value) ||
+    value.includes("\\")
+  ) {
+    return false;
+  }
+  const segments = value.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }

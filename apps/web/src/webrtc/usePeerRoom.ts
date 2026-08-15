@@ -17,6 +17,8 @@ export type PeerRoomController = PeerRoomState & {
   acceptTransfer: (id: string) => TransferActionResult;
   declineTransfer: (id: string) => TransferActionResult;
   cancelTransfer: (id: string) => TransferActionResult;
+  pauseTransfer: (id: string) => TransferActionResult;
+  resumeTransfer: (id: string) => TransferActionResult;
 };
 
 export function usePeerRoom(roomId: string): PeerRoomController {
@@ -85,6 +87,18 @@ export function usePeerRoom(roomId: string): PeerRoomController {
     [],
   );
 
+  const pauseTransfer = useCallback(
+    (id: string): TransferActionResult =>
+      sessionRef.current?.pauseTransfer(id) ?? { ok: false, error: "Transfer not found." },
+    [],
+  );
+
+  const resumeTransfer = useCallback(
+    (id: string): TransferActionResult =>
+      sessionRef.current?.resumeTransfer(id) ?? { ok: false, error: "Transfer not found." },
+    [],
+  );
+
   return {
     ...state,
     sendChatMessage,
@@ -93,5 +107,7 @@ export function usePeerRoom(roomId: string): PeerRoomController {
     acceptTransfer,
     declineTransfer,
     cancelTransfer,
+    pauseTransfer,
+    resumeTransfer,
   };
 }

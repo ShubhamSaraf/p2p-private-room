@@ -38,6 +38,7 @@ import {
   chunkCount,
   decodeTransferChunk,
   encodeTransferChunk,
+  isValidResumePoint,
   waitForTransferCapacity,
 } from "@peerlink/transfer";
 
@@ -74,7 +75,14 @@ export type ChatEntry = ChatMessage & {
 export type TransferEntry = FileOfferMessage & {
   direction: "incoming" | "outgoing";
   status:
-    "offered" | "waiting" | "transferring" | "completed" | "declined" | "cancelled" | "failed";
+    | "offered"
+    | "waiting"
+    | "transferring"
+    | "paused"
+    | "completed"
+    | "declined"
+    | "cancelled"
+    | "failed";
   bytesTransferred: number;
   integrity: "pending" | "verified" | "failed";
   objectUrl?: string;
@@ -106,6 +114,18 @@ type SessionOptions = {
   onStateChange: (state: PeerRoomState) => void;
 };
 
+type OutgoingTransfer = {
+  file: File;
+  controller: AbortController;
+  paused: boolean;
+  nextChunk: number;
+  sentBytes: number;
+  resume: (() => void) | null;
+  generation: number;
+  transmitting: boolean;
+  accepted: boolean;
+};
+
 export class PeerRoomSession {
   private readonly roomId: string;
   private readonly signalingUrl: string;
@@ -128,7 +148,7 @@ export class PeerRoomSession {
   private pakeState: PakeState | null = null;
   private pakeResult: PakeResult | null = null;
   private applicationCipher: ApplicationCipher | null = null;
-  private readonly outgoingFiles = new Map<string, { file: File; controller: AbortController }>();
+  private readonly outgoingFiles = new Map<string, OutgoingTransfer>();
   private readonly incomingFiles = new Map<
     string,
     {
@@ -147,6 +167,7 @@ export class PeerRoomSession {
   private reconnectAttempt = 0;
   private reconnectDeadline = 0;
   private hasOpenedSocket = false;
+  private connectionInterrupted = false;
 
   constructor(options: SessionOptions) {
     this.roomId = options.roomId;
@@ -216,7 +237,8 @@ export class PeerRoomSession {
       if (this.socket === socket) this.socket = null;
       if (this.disposed || !this.hasOpenedSocket) return;
       this.role = null;
-      this.resetPeerConnection();
+      this.connectionInterrupted = true;
+      this.resetPeerConnection(true);
       this.update({
         role: null,
         phase: "reconnecting",
@@ -351,8 +373,19 @@ export class PeerRoomSession {
       mime: file.type.slice(0, 255),
       category,
       lastModified: Math.max(0, file.lastModified),
+      ...getSafeRelativePath(file),
     };
-    this.outgoingFiles.set(id, { file, controller: new AbortController() });
+    this.outgoingFiles.set(id, {
+      file,
+      controller: new AbortController(),
+      paused: false,
+      nextChunk: 0,
+      sentBytes: 0,
+      resume: null,
+      generation: 0,
+      transmitting: false,
+      accepted: false,
+    });
     this.appendTransfer({
       ...offer,
       direction: "outgoing",
@@ -390,6 +423,38 @@ export class PeerRoomSession {
     if (!this.transferById(id)) return { ok: false, error: "Transfer not found." };
     this.updateTransfer(id, { status: "cancelled" });
     this.sendEncryptedControl({ type: "file-cancel", id, reason: "Cancelled by peer." });
+    return { ok: true };
+  }
+
+  pauseTransfer(id: string): TransferActionResult {
+    const outgoing = this.outgoingFiles.get(id);
+    const incoming = this.incomingFiles.get(id);
+    const transfer = this.transferById(id);
+    if (!transfer || transfer.status !== "transferring" || (!outgoing && !incoming)) {
+      return { ok: false, error: "This transfer cannot be paused." };
+    }
+    if (outgoing) outgoing.paused = true;
+    this.updateTransfer(id, { status: "paused" });
+    this.sendEncryptedControl({ type: "file-pause", id });
+    return { ok: true };
+  }
+
+  resumeTransfer(id: string): TransferActionResult {
+    const outgoing = this.outgoingFiles.get(id);
+    const incoming = this.incomingFiles.get(id);
+    const transfer = this.transferById(id);
+    if (!transfer || transfer.status !== "paused" || (!outgoing && !incoming)) {
+      return { ok: false, error: "This transfer cannot be resumed." };
+    }
+    const nextChunk = outgoing?.nextChunk ?? incoming?.nextChunk ?? 0;
+    const byteOffset = outgoing?.sentBytes ?? incoming?.receivedBytes ?? 0;
+    if (outgoing) {
+      outgoing.paused = false;
+      outgoing.resume?.();
+      outgoing.resume = null;
+    }
+    this.updateTransfer(id, { status: "transferring" });
+    this.sendEncryptedControl({ type: "file-resume", id, nextChunk, byteOffset });
     return { ok: true };
   }
 
@@ -433,7 +498,8 @@ export class PeerRoomSession {
         await this.receiveCandidate(message);
         return;
       case "peer-left":
-        this.resetPeerConnection();
+        this.connectionInterrupted = true;
+        this.resetPeerConnection(true);
         this.ensurePeerConnection();
         this.update({ phase: "waiting", error: null });
         return;
@@ -670,7 +736,7 @@ export class PeerRoomSession {
       return;
     }
     if (applicationMessage.type !== "chat") {
-      this.handleTransferControl(applicationMessage);
+      await this.handleTransferControl(applicationMessage);
       return;
     }
     if (this.seenChatMessageIds.has(applicationMessage.id)) return;
@@ -692,7 +758,7 @@ export class PeerRoomSession {
     }
   }
 
-  private handleTransferControl(message: TransferControlMessage): void {
+  private async handleTransferControl(message: TransferControlMessage): Promise<void> {
     switch (message.type) {
       case "file-offer": {
         if (this.incomingFiles.has(message.id) || this.transferById(message.id)) {
@@ -720,12 +786,8 @@ export class PeerRoomSession {
         if (!outgoing || this.transferById(message.id)?.status !== "waiting") {
           throw new Error("The peer accepted an unknown file offer.");
         }
-        void this.transmitFile(message.id, outgoing).catch((error: unknown) => {
-          if (error instanceof DOMException && error.name === "AbortError") return;
-          const detail = error instanceof Error ? error.message : "Transfer failed.";
-          this.updateTransfer(message.id, { status: "failed", error: detail });
-          this.trySendTransferCancel(message.id, "Sender transfer failed.");
-        });
+        outgoing.accepted = true;
+        this.startTransmitFile(message.id, outgoing);
         return;
       }
       case "file-decline":
@@ -738,6 +800,70 @@ export class PeerRoomSession {
         this.incomingFiles.delete(message.id);
         this.updateTransfer(message.id, { status: "cancelled", error: message.reason });
         return;
+      case "file-pause": {
+        const outgoing = this.outgoingFiles.get(message.id);
+        const incoming = this.incomingFiles.get(message.id);
+        if (!outgoing && !incoming) throw new Error("The peer paused an unknown transfer.");
+        if (outgoing) outgoing.paused = true;
+        this.updateTransfer(message.id, { status: "paused" });
+        return;
+      }
+      case "file-resume": {
+        const outgoing = this.outgoingFiles.get(message.id);
+        const incoming = this.incomingFiles.get(message.id);
+        const expectedChunk = outgoing?.nextChunk ?? incoming?.nextChunk;
+        const expectedOffset = outgoing?.sentBytes ?? incoming?.receivedBytes;
+        if (expectedChunk === undefined || expectedOffset === undefined) {
+          throw new Error("The peer resumed an unknown transfer.");
+        }
+        if (
+          incoming &&
+          (expectedChunk !== message.nextChunk || expectedOffset !== message.byteOffset)
+        ) {
+          throw new Error("The peer sent inconsistent transfer resume state.");
+        }
+        if (outgoing) {
+          if (!isValidResumePoint(outgoing.file.size, message.nextChunk, message.byteOffset)) {
+            throw new Error("The peer sent an invalid transfer resume offset.");
+          }
+          if (
+            outgoing.transmitting &&
+            (outgoing.nextChunk !== message.nextChunk || outgoing.sentBytes !== message.byteOffset)
+          ) {
+            throw new Error("The peer sent inconsistent live transfer state.");
+          }
+          outgoing.nextChunk = message.nextChunk;
+          outgoing.sentBytes = message.byteOffset;
+          outgoing.paused = false;
+          outgoing.resume?.();
+          outgoing.resume = null;
+          this.startTransmitFile(message.id, outgoing);
+        }
+        this.updateTransfer(message.id, {
+          status: "transferring",
+          bytesTransferred: message.byteOffset,
+        });
+        return;
+      }
+      case "file-resume-offer": {
+        const incoming = this.incomingFiles.get(message.id);
+        if (!incoming || incoming.offer.size !== message.size) {
+          this.sendEncryptedControl({
+            type: "file-cancel",
+            id: message.id,
+            reason: "Partial transfer state is unavailable.",
+          });
+          return;
+        }
+        this.updateTransfer(message.id, { status: "paused" });
+        this.sendEncryptedControl({
+          type: "file-resume",
+          id: message.id,
+          nextChunk: incoming.nextChunk,
+          byteOffset: incoming.receivedBytes,
+        });
+        return;
+      }
       case "file-complete":
         this.completeIncomingTransfer(message);
         return;
@@ -752,49 +878,71 @@ export class PeerRoomSession {
     }
   }
 
-  private async transmitFile(
-    id: string,
-    outgoing: { file: File; controller: AbortController },
-  ): Promise<void> {
+  private startTransmitFile(id: string, outgoing: OutgoingTransfer): void {
+    if (outgoing.transmitting) return;
+    void this.transmitFile(id, outgoing).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (this.connectionInterrupted && this.outgoingFiles.has(id)) {
+        outgoing.paused = true;
+        this.updateTransfer(id, { status: "paused", error: "Waiting to reconnect." });
+        return;
+      }
+      const detail = error instanceof Error ? error.message : "Transfer failed.";
+      this.updateTransfer(id, { status: "failed", error: detail });
+      this.trySendTransferCancel(id, "Sender transfer failed.");
+    });
+  }
+
+  private async transmitFile(id: string, outgoing: OutgoingTransfer): Promise<void> {
+    outgoing.transmitting = true;
     const { file, controller } = outgoing;
-    const hasher = new TransferHasher();
-    let sentBytes = 0;
-    let index = 0;
+    const generation = outgoing.generation;
+    let sentBytes = outgoing.sentBytes;
+    let index = outgoing.nextChunk;
     let lastProgressAt = 0;
     this.updateTransfer(id, { status: "transferring" });
 
-    while (sentBytes < file.size) {
-      if (controller.signal.aborted) throw new DOMException("Transfer cancelled.", "AbortError");
-      if (!this.channel) throw new Error("Transfer DataChannel is missing.");
-      await waitForTransferCapacity(this.channel, controller.signal);
-      const end = Math.min(sentBytes + TRANSFER_CHUNK_SIZE, file.size);
-      const bytes = new Uint8Array(await file.slice(sentBytes, end).arrayBuffer());
-      hasher.update(bytes);
-      const chunkFrame = encodeTransferChunk({ transferId: id, chunkIndex: index, data: bytes });
-      this.sendEncryptedBinary(chunkFrame);
-      chunkFrame.fill(0);
-      bytes.fill(0);
-      sentBytes = end;
-      index += 1;
-      const now = performance.now();
-      if (now - lastProgressAt >= 100 || sentBytes === file.size) {
-        this.updateTransfer(id, { bytesTransferred: sentBytes });
-        lastProgressAt = now;
+    try {
+      const hasher = await hashFilePrefix(file, outgoing.sentBytes, controller.signal);
+      while (sentBytes < file.size) {
+        if (controller.signal.aborted) throw new DOMException("Transfer cancelled.", "AbortError");
+        if (outgoing.paused) await waitUntilResumed(outgoing);
+        if (generation !== outgoing.generation) return;
+        if (!this.channel) throw new Error("Transfer DataChannel is missing.");
+        await waitForTransferCapacity(this.channel, controller.signal);
+        const end = Math.min(sentBytes + TRANSFER_CHUNK_SIZE, file.size);
+        const bytes = new Uint8Array(await file.slice(sentBytes, end).arrayBuffer());
+        hasher.update(bytes);
+        const chunkFrame = encodeTransferChunk({ transferId: id, chunkIndex: index, data: bytes });
+        this.sendEncryptedBinary(chunkFrame);
+        chunkFrame.fill(0);
+        bytes.fill(0);
+        sentBytes = end;
+        index += 1;
+        outgoing.sentBytes = sentBytes;
+        outgoing.nextChunk = index;
+        const now = performance.now();
+        if (now - lastProgressAt >= 100 || sentBytes === file.size) {
+          this.updateTransfer(id, { bytesTransferred: sentBytes });
+          lastProgressAt = now;
+        }
       }
-    }
 
-    this.sendEncryptedControl({
-      type: "file-complete",
-      id,
-      chunks: chunkCount(file.size),
-      sha256: hasher.digestHex(),
-    });
-    this.updateTransfer(id, {
-      status: "completed",
-      bytesTransferred: file.size,
-      integrity: "pending",
-    });
-    this.outgoingFiles.delete(id);
+      this.sendEncryptedControl({
+        type: "file-complete",
+        id,
+        chunks: chunkCount(file.size),
+        sha256: hasher.digestHex(),
+      });
+      this.updateTransfer(id, {
+        status: "completed",
+        bytesTransferred: file.size,
+        integrity: "pending",
+      });
+      this.outgoingFiles.delete(id);
+    } finally {
+      outgoing.transmitting = false;
+    }
   }
 
   private receiveTransferChunk(chunk: {
@@ -803,7 +951,8 @@ export class PeerRoomSession {
     data: Uint8Array;
   }): void {
     const incoming = this.incomingFiles.get(chunk.transferId);
-    if (!incoming || this.transferById(chunk.transferId)?.status !== "transferring") {
+    const transferStatus = this.transferById(chunk.transferId)?.status;
+    if (!incoming || (transferStatus !== "transferring" && transferStatus !== "paused")) {
       throw new Error("Received a chunk for an unaccepted transfer.");
     }
     if (chunk.chunkIndex !== incoming.nextChunk) throw new Error("Transfer chunk is out of order.");
@@ -950,6 +1099,19 @@ export class PeerRoomSession {
     destroyPakeResult(this.pakeResult);
     this.pakeResult = null;
     this.update({ authentication: "verified", authError: null, chatError: null });
+    if (this.connectionInterrupted) {
+      this.connectionInterrupted = false;
+      for (const [id, outgoing] of this.outgoingFiles) {
+        if (!outgoing.accepted) continue;
+        this.sendEncryptedControl({
+          type: "file-resume-offer",
+          id,
+          size: outgoing.file.size,
+          nextChunk: outgoing.nextChunk,
+          byteOffset: outgoing.sentBytes,
+        });
+      }
+    }
   }
 
   private sendEncryptedControl(message: ApplicationMessage): void {
@@ -1034,15 +1196,32 @@ export class PeerRoomSession {
     }
   }
 
-  private resetPeerConnection(): void {
+  private resetPeerConnection(preserveTransfers = false): void {
     this.pendingCandidates = [];
     this.seenChatMessageIds.clear();
     this.authenticationAttempted = false;
-    for (const outgoing of this.outgoingFiles.values()) outgoing.controller.abort();
-    this.outgoingFiles.clear();
-    this.incomingFiles.clear();
-    for (const objectUrl of this.objectUrls) URL.revokeObjectURL(objectUrl);
-    this.objectUrls.clear();
+    if (preserveTransfers) {
+      for (const [id, outgoing] of this.outgoingFiles) {
+        if (!outgoing.accepted) {
+          outgoing.controller.abort();
+          this.outgoingFiles.delete(id);
+          continue;
+        }
+        outgoing.generation += 1;
+        outgoing.paused = true;
+        outgoing.resume?.();
+        outgoing.resume = null;
+      }
+      for (const [id] of this.incomingFiles) {
+        if (this.transferById(id)?.status === "offered") this.incomingFiles.delete(id);
+      }
+    } else {
+      for (const outgoing of this.outgoingFiles.values()) outgoing.controller.abort();
+      this.outgoingFiles.clear();
+      this.incomingFiles.clear();
+      for (const objectUrl of this.objectUrls) URL.revokeObjectURL(objectUrl);
+      this.objectUrls.clear();
+    }
     this.pendingSecret = null;
     this.pendingPeerShare = null;
     this.pendingPeerConfirmation?.fill(0);
@@ -1058,14 +1237,29 @@ export class PeerRoomSession {
     this.peer?.close();
     this.channel = null;
     this.peer = null;
+    const preservedState = preserveTransfers
+      ? {
+          messages: this.state.messages,
+          transfers: this.state.transfers.map((transfer) =>
+            transfer.status === "waiting" || transfer.status === "offered"
+              ? {
+                  ...transfer,
+                  status: "cancelled" as const,
+                  error: "Offer ended when the connection changed.",
+                }
+              : transfer.status === "transferring"
+                ? { ...transfer, status: "paused" as const, error: "Waiting to reconnect." }
+                : transfer,
+          ),
+        }
+      : { messages: [], transfers: [] };
     this.update({
       peerConnection: "closed",
       dataChannel: "none",
       connectionPath: "unknown",
       authentication: "waiting-for-peer",
       authError: null,
-      messages: [],
-      transfers: [],
+      ...preservedState,
       chatError: null,
     });
   }
@@ -1145,6 +1339,51 @@ function hasControlCharacters(value: string): boolean {
     const code = character.charCodeAt(0);
     return code <= 31 || code === 127;
   });
+}
+
+function getSafeRelativePath(file: File): { relativePath: string } | Record<string, never> {
+  const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+  if (
+    !relativePath ||
+    relativePath.length > 1_024 ||
+    relativePath.includes("\\") ||
+    relativePath.split("/").some((segment) => !segment || segment === "." || segment === "..") ||
+    hasControlCharacters(relativePath)
+  ) {
+    return {};
+  }
+  return { relativePath };
+}
+
+function waitUntilResumed(outgoing: OutgoingTransfer): Promise<void> {
+  if (!outgoing.paused) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      outgoing.resume = null;
+      reject(new DOMException("Transfer cancelled.", "AbortError"));
+    };
+    outgoing.controller.signal.addEventListener("abort", abort, { once: true });
+    outgoing.resume = () => {
+      outgoing.controller.signal.removeEventListener("abort", abort);
+      resolve();
+    };
+  });
+}
+
+async function hashFilePrefix(
+  file: File,
+  byteOffset: number,
+  signal: AbortSignal,
+): Promise<TransferHasher> {
+  const hasher = new TransferHasher();
+  for (let offset = 0; offset < byteOffset; offset += TRANSFER_CHUNK_SIZE) {
+    if (signal.aborted) throw new DOMException("Transfer cancelled.", "AbortError");
+    const end = Math.min(offset + TRANSFER_CHUNK_SIZE, byteOffset);
+    const bytes = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+    hasher.update(bytes);
+    bytes.fill(0);
+  }
+  return hasher;
 }
 
 function createSocketUrl(signalingUrl: string, roomId: string): string {

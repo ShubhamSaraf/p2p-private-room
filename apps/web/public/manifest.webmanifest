@@ -1,0 +1,18 @@
+{
+  "name": "PeerLink Private Room",
+  "short_name": "PeerLink",
+  "description": "Accountless, temporary, encrypted peer-to-peer rooms.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#08111d",
+  "icons": [
+    {
+      "src": "/peerlink-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

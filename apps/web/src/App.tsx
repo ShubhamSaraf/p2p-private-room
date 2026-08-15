@@ -6,6 +6,7 @@ import {
 } from "@peerlink/protocol";
 import { SHARED_SECRET_MAX_LENGTH, SHARED_SECRET_MIN_LENGTH } from "@peerlink/crypto";
 import { isProbablyCompressed } from "@peerlink/transfer";
+import QRCode from "qrcode";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ChatEntry, TransferEntry } from "./webrtc/PeerRoomSession";
@@ -110,8 +111,8 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
         </div>
 
         <aside className="glass-card rounded-3xl p-6 sm:p-8" aria-label="Service status">
-          <p className="text-sm font-medium text-slate-400">Phase 11 status</p>
-          <h2 className="mt-2 text-2xl font-semibold">Resilient, private rooms</h2>
+          <p className="text-sm font-medium text-slate-400">Phase 16 status</p>
+          <h2 className="mt-2 text-2xl font-semibold">Installable, resilient sharing</h2>
           <dl className="mt-8 space-y-5 text-sm">
             <StatusRow label="Signaling service" value={healthLabel(health)} state={health} />
             <StatusRow label="Room capacity" value="Two peers" />
@@ -130,6 +131,7 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
 function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) {
   const state = usePeerRoom(roomId);
   const [copied, setCopied] = useState(false);
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [secret, setSecret] = useState("");
   const [secretError, setSecretError] = useState<string | null>(null);
@@ -141,12 +143,27 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
     file: File;
     category: "image" | "file";
   } | null>(null);
+  const [pendingBatch, setPendingBatch] = useState<File[] | null>(null);
   const [compressedFile, setCompressedFile] = useState<File | null>(null);
   const [compressionProgress, setCompressionProgress] = useState<number | null>(null);
   const imagePickerRef = useRef<HTMLInputElement>(null);
   const filePickerRef = useRef<HTMLInputElement>(null);
+  const folderPickerRef = useRef<HTMLInputElement>(null);
   const compressionWorkerRef = useRef<Worker | null>(null);
   const inviteUrl = `${window.location.origin}/r/${roomId}`;
+  const canShare = Reflect.has(navigator, "share");
+  const activeTransfers = state.transfers.some(
+    (transfer) =>
+      transfer.status === "offered" ||
+      transfer.status === "waiting" ||
+      transfer.status === "transferring" ||
+      transfer.status === "paused",
+  );
+  const transferTotalBytes = state.transfers.reduce((total, transfer) => total + transfer.size, 0);
+  const transferredTotalBytes = state.transfers.reduce(
+    (total, transfer) => total + transfer.bytesTransferred,
+    0,
+  );
   const visibleMessages = useMemo(() => {
     if (!historyEnabled) return state.messages;
     const messages = new Map(savedMessages.map((message) => [message.id, message]));
@@ -172,6 +189,15 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
     }
   }, [historyEnabled, roomId, state.messages]);
 
+  useEffect(() => {
+    if (!activeTransfers) return;
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [activeTransfers]);
+
   async function toggleLocalHistory(enabled: boolean) {
     setHistoryEnabled(enabled);
     await setLocalHistoryEnabled(enabled);
@@ -195,6 +221,33 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
       window.setTimeout(() => setCopied(false), 2_000);
     } catch {
       setCopied(false);
+    }
+  }
+
+  async function toggleQrCode() {
+    if (qrCodeUrl) {
+      setQrCodeUrl(null);
+      return;
+    }
+    setQrCodeUrl(
+      await QRCode.toDataURL(inviteUrl, {
+        width: 320,
+        margin: 2,
+        color: { dark: "#020617", light: "#ffffff" },
+      }),
+    );
+  }
+
+  async function shareInvite() {
+    if (!canShare) return;
+    try {
+      await navigator.share({
+        title: "Join my PeerLink room",
+        text: "Open this private room. I will share the secret separately.",
+        url: inviteUrl,
+      });
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
     }
   }
 
@@ -224,6 +277,28 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
     setCompressedFile(null);
     setCompressionProgress(null);
     setTransferError(null);
+  }
+
+  function offerSelectedFiles(files: File[]) {
+    if (files.length === 0) return;
+    if (files.length === 1) {
+      offerSelectedFile(files[0], "file");
+      return;
+    }
+    setPendingBatch(files);
+    setPendingFile(null);
+    setTransferError(null);
+  }
+
+  function sendPendingBatch() {
+    if (!pendingBatch) return;
+    const failures: string[] = [];
+    for (const file of pendingBatch) {
+      const result = state.offerFile(file, "file");
+      if (!result.ok) failures.push(`${file.name}: ${result.error}`);
+    }
+    setTransferError(failures.length > 0 ? failures.join(" ") : null);
+    if (failures.length === 0) setPendingBatch(null);
   }
 
   function sendPendingFile(file: File) {
@@ -291,13 +366,43 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                   Invite link
                 </p>
                 <p className="mt-2 truncate font-mono text-sm text-slate-200">{inviteUrl}</p>
-                <button
-                  className="mt-4 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-sm font-medium text-cyan-200 hover:bg-cyan-300/15"
-                  onClick={() => void copyInvite()}
-                  type="button"
-                >
-                  {copied ? "Copied" : "Copy invite link"}
-                </button>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    className="min-h-11 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-sm font-medium text-cyan-200 hover:bg-cyan-300/15"
+                    onClick={() => void copyInvite()}
+                    type="button"
+                  >
+                    {copied ? "Copied" : "Copy link"}
+                  </button>
+                  <button
+                    className="min-h-11 rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300"
+                    onClick={() => void toggleQrCode()}
+                    type="button"
+                  >
+                    {qrCodeUrl ? "Hide QR" : "Show QR"}
+                  </button>
+                  {canShare ? (
+                    <button
+                      className="min-h-11 rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300"
+                      onClick={() => void shareInvite()}
+                      type="button"
+                    >
+                      Share
+                    </button>
+                  ) : null}
+                </div>
+                {qrCodeUrl ? (
+                  <div className="mt-4 max-w-xs rounded-2xl bg-white p-3">
+                    <img
+                      alt="QR code containing only the PeerLink room URL"
+                      className="aspect-square w-full"
+                      src={qrCodeUrl}
+                    />
+                  </div>
+                ) : null}
+                <p className="mt-3 text-xs text-slate-500">
+                  The QR and share action contain only this room URL—never the shared secret.
+                </p>
               </div>
 
               {state.error ? (
@@ -442,7 +547,7 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                 <p className="text-sm font-medium text-slate-400">Encrypted transfers</p>
                 <h2 className="mt-1 text-xl font-semibold">Images and files stay peer-to-peer</h2>
               </div>
-              <div className="flex gap-3">
+              <div className="flex flex-wrap gap-3">
                 <input
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   className="sr-only"
@@ -466,9 +571,10 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                   className="sr-only"
                   id="file-picker"
                   onChange={(event) => {
-                    offerSelectedFile(event.target.files?.[0], "file");
+                    offerSelectedFiles(Array.from(event.target.files ?? []));
                     event.target.value = "";
                   }}
+                  multiple
                   ref={filePickerRef}
                   type="file"
                 />
@@ -478,10 +584,68 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                   onClick={() => filePickerRef.current?.click()}
                   type="button"
                 >
-                  Send file
+                  Send files
+                </button>
+                <input
+                  className="sr-only"
+                  id="folder-picker"
+                  multiple
+                  onChange={(event) => {
+                    offerSelectedFiles(Array.from(event.target.files ?? []));
+                    event.target.value = "";
+                  }}
+                  ref={(input) => {
+                    folderPickerRef.current = input;
+                    input?.setAttribute("webkitdirectory", "");
+                  }}
+                  type="file"
+                />
+                <button
+                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={state.authentication !== "verified"}
+                  onClick={() => folderPickerRef.current?.click()}
+                  type="button"
+                >
+                  Send folder
                 </button>
               </div>
             </div>
+
+            {activeTransfers ? (
+              <p
+                className="mx-6 mt-6 rounded-xl border border-amber-300/20 bg-amber-300/8 px-4 py-3 text-sm text-amber-100 sm:mx-8"
+                role="status"
+              >
+                Keep PeerLink open until the transfer finishes. Mobile browsers may pause work when
+                this page is in the background.
+              </p>
+            ) : null}
+
+            {pendingBatch ? (
+              <div className="mx-6 mt-6 rounded-2xl border border-cyan-300/20 bg-cyan-300/6 p-5 sm:mx-8">
+                <p className="font-medium">Send {pendingBatch.length} files</p>
+                <p className="mt-1 text-sm text-slate-400">
+                  {formatBytes(pendingBatch.reduce((total, file) => total + file.size, 0))} total.
+                  Each file remains individually encrypted and verified.
+                </p>
+                <div className="mt-5 flex gap-3">
+                  <button
+                    className="rounded-xl bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
+                    onClick={sendPendingBatch}
+                    type="button"
+                  >
+                    Send batch
+                  </button>
+                  <button
+                    className="text-sm text-slate-400 underline underline-offset-4"
+                    onClick={() => setPendingBatch(null)}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {pendingFile ? (
               <div className="mx-6 mt-6 rounded-2xl border border-cyan-300/20 bg-cyan-300/6 p-5 sm:mx-8">
@@ -569,6 +733,24 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
             ) : null}
 
             <div className="grid gap-4 p-6 sm:grid-cols-2 sm:p-8">
+              {state.transfers.length > 1 ? (
+                <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/5 p-4 sm:col-span-2">
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span>Aggregate progress · {state.transfers.length} files</span>
+                    <span>
+                      {formatBytes(transferredTotalBytes)} / {formatBytes(transferTotalBytes)}
+                    </span>
+                  </div>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/8">
+                    <div
+                      className="h-full bg-cyan-300"
+                      style={{
+                        width: `${transferTotalBytes === 0 ? 100 : (transferredTotalBytes / transferTotalBytes) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
               {state.transfers.length === 0 ? (
                 <p className="text-sm text-slate-400 sm:col-span-2">
                   Choose an image or file after authentication. The receiver must accept before any
@@ -584,6 +766,14 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                     }}
                     onCancel={() => {
                       const result = state.cancelTransfer(transfer.id);
+                      if (!result.ok) setTransferError(result.error);
+                    }}
+                    onPause={() => {
+                      const result = state.pauseTransfer(transfer.id);
+                      if (!result.ok) setTransferError(result.error);
+                    }}
+                    onResume={() => {
+                      const result = state.resumeTransfer(transfer.id);
                       if (!result.ok) setTransferError(result.error);
                     }}
                     onDecline={() => {
@@ -689,6 +879,23 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
 }
 
 function PageShell({ children }: { children: React.ReactNode }) {
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+
+  useEffect(() => {
+    const capturePrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    window.addEventListener("beforeinstallprompt", capturePrompt);
+    return () => window.removeEventListener("beforeinstallprompt", capturePrompt);
+  }, []);
+
+  async function installApp() {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    setInstallPrompt(null);
+  }
+
   return (
     <main className="min-h-screen overflow-hidden bg-slate-950 text-slate-100">
       <div className="ambient ambient-one" aria-hidden="true" />
@@ -701,9 +908,20 @@ function PageShell({ children }: { children: React.ReactNode }) {
             </span>
             {PRODUCT_NAME}
           </a>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-            Phase 11
-          </span>
+          <div className="flex items-center gap-3">
+            {installPrompt ? (
+              <button
+                className="min-h-10 rounded-xl border border-cyan-300/25 px-3 text-xs font-medium text-cyan-200"
+                onClick={() => void installApp()}
+                type="button"
+              >
+                Install app
+              </button>
+            ) : null}
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
+              Phase 16
+            </span>
+          </div>
         </header>
         {children}
         <footer className="text-sm text-slate-500">
@@ -713,6 +931,10 @@ function PageShell({ children }: { children: React.ReactNode }) {
     </main>
   );
 }
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+};
 
 function ChatBubble({ message }: { message: ChatEntry }) {
   const outgoing = message.direction === "outgoing";
@@ -746,11 +968,15 @@ function TransferCard({
   onAccept,
   onDecline,
   onCancel,
+  onPause,
+  onResume,
 }: {
   transfer: TransferEntry;
   onAccept: () => void;
   onDecline: () => void;
   onCancel: () => void;
+  onPause: () => void;
+  onResume: () => void;
 }) {
   const progress = transfer.size === 0 ? 100 : (transfer.bytesTransferred / transfer.size) * 100;
   const active = transfer.status === "waiting" || transfer.status === "transferring";
@@ -769,8 +995,8 @@ function TransferCard({
       ) : null}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className="truncate font-medium" title={transfer.name}>
-            {transfer.name}
+          <p className="truncate font-medium" title={transfer.relativePath ?? transfer.name}>
+            {transfer.relativePath ?? transfer.name}
           </p>
           <p className="mt-1 text-xs text-slate-400">
             {formatBytes(transfer.size)} ·{" "}
@@ -808,13 +1034,42 @@ function TransferCard({
         </div>
       ) : null}
       {active ? (
-        <button
-          className="mt-4 text-sm text-rose-300 underline underline-offset-4"
-          onClick={onCancel}
-          type="button"
-        >
-          Cancel
-        </button>
+        <div className="mt-4 flex gap-4">
+          {transfer.status === "transferring" ? (
+            <button
+              className="text-sm text-cyan-200 underline underline-offset-4"
+              onClick={onPause}
+              type="button"
+            >
+              Pause
+            </button>
+          ) : null}
+          <button
+            className="text-sm text-rose-300 underline underline-offset-4"
+            onClick={onCancel}
+            type="button"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : null}
+      {transfer.status === "paused" ? (
+        <div className="mt-4 flex gap-4">
+          <button
+            className="text-sm font-medium text-cyan-200 underline underline-offset-4"
+            onClick={onResume}
+            type="button"
+          >
+            Resume
+          </button>
+          <button
+            className="text-sm text-rose-300 underline underline-offset-4"
+            onClick={onCancel}
+            type="button"
+          >
+            Cancel
+          </button>
+        </div>
       ) : null}
       {transfer.status === "completed" && transfer.objectUrl ? (
         <a

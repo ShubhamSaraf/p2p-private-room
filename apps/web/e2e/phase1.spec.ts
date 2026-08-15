@@ -20,6 +20,11 @@ test("two browser pages connect and exchange direct chat messages", async ({ con
   await expect(page.getByRole("heading", { name: "Waiting for your peer" })).toBeVisible();
   const inviteUrl = page.url();
   expect(inviteUrl).toMatch(/\/r\/[A-Za-z0-9_-]{32}$/);
+  await page.getByRole("button", { name: "Show QR" }).click();
+  await expect(page.getByAltText("QR code containing only the PeerLink room URL")).toHaveAttribute(
+    "src",
+    /^data:image\/png/,
+  );
 
   const peerPage = await context.newPage();
   await peerPage.goto(inviteUrl);
@@ -114,6 +119,17 @@ test("two browser pages connect and exchange direct chat messages", async ({ con
   await incomingZip.getByRole("button", { name: "Accept" }).click();
   await expect(incomingZip).toContainText("Verified", { timeout: 20_000 });
 
+  await page.locator("#file-picker").setInputFiles([
+    { name: "batch-a.txt", mimeType: "text/plain", buffer: Buffer.from("batch a") },
+    { name: "batch-b.txt", mimeType: "text/plain", buffer: Buffer.from("batch b") },
+  ]);
+  await page.getByRole("button", { name: "Send batch" }).click();
+  for (const name of ["batch-a.txt", "batch-b.txt"]) {
+    const incomingBatchFile = peerPage.locator("article", { hasText: name });
+    await incomingBatchFile.getByRole("button", { name: "Accept" }).click();
+    await expect(incomingBatchFile).toContainText("Verified", { timeout: 20_000 });
+  }
+
   const thirdPage = await context.newPage();
   await thirdPage.goto(inviteUrl);
   await expect(thirdPage.getByRole("heading", { name: "Connection failed" })).toBeVisible();
@@ -121,6 +137,22 @@ test("two browser pages connect and exchange direct chat messages", async ({ con
 
   await peerPage.close();
   await expect(page.getByRole("heading", { name: "Waiting for your peer" })).toBeVisible();
+});
+
+test("publishes a local installable app shell", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+    "href",
+    "/manifest.webmanifest",
+  );
+  const manifest = await page.evaluate(async () =>
+    fetch("/manifest.webmanifest").then((response) => response.json()),
+  );
+  expect(manifest).toMatchObject({ name: "PeerLink Private Room", display: "standalone" });
+  const serviceWorker = await page.evaluate(async () =>
+    fetch("/sw.js").then((response) => response.text()),
+  );
+  expect(serviceWorker).toContain("peerlink-shell-v1");
 });
 
 test("different shared secrets keep direct chat locked", async ({ context, page }) => {
