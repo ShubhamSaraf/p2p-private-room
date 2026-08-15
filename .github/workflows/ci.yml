@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.13
           cache: npm
@@ -32,19 +32,8 @@ jobs:
         run: npm run test --workspace @peerlink/crypto
       - name: Test transfer
         run: npm run test --workspace @peerlink/transfer
-      - name: Test web history
-        shell: pwsh
-        run: |
-          $output = npm exec --workspace @peerlink/web -- vitest run src/localHistory.test.ts --reporter=default --reporter=github-actions 2>&1 | Out-String
-          $status = $LASTEXITCODE
-          Write-Output $output
-          if ($status -ne 0) {
-            $message = $output.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Output "::error title=Web test startup::$message"
-            exit $status
-          }
-      - name: Test web application
-        run: npm exec --workspace @peerlink/web -- vitest run src/App.test.tsx --reporter=default --reporter=github-actions
+      - name: Test web
+        run: npm run test --workspace @peerlink/web
       - name: Test signaling
         run: npm run test --workspace @peerlink/signaling
       - name: Build workspaces
