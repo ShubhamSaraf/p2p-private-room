@@ -4,6 +4,7 @@ import {
   type ChatMessage,
   type ServiceHealth,
 } from "@peerlink/protocol";
+import { SHARED_SECRET_MAX_LENGTH, SHARED_SECRET_MIN_LENGTH } from "@peerlink/crypto";
 import { type FormEvent, useEffect, useState } from "react";
 
 import type { ChatEntry } from "./webrtc/PeerRoomSession";
@@ -83,7 +84,7 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
           </h1>
           <p className="mt-7 max-w-2xl text-lg leading-8 text-slate-300">
             Create an unguessable room, share its link, and establish a direct browser-to-browser
-            connection for private text chat.
+            connection, verify a shared secret, and then unlock private text chat.
           </p>
           <button
             className="mt-10 rounded-2xl bg-cyan-300 px-6 py-3.5 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60"
@@ -101,13 +102,14 @@ function LandingPage({ onRoomCreated }: { onRoomCreated: (path: string) => void 
         </div>
 
         <aside className="glass-card rounded-3xl p-6 sm:p-8" aria-label="Service status">
-          <p className="text-sm font-medium text-slate-400">Phase 2 status</p>
-          <h2 className="mt-2 text-2xl font-semibold">Direct text chat</h2>
+          <p className="text-sm font-medium text-slate-400">Phase 3 status</p>
+          <h2 className="mt-2 text-2xl font-semibold">Shared-secret authentication</h2>
           <dl className="mt-8 space-y-5 text-sm">
             <StatusRow label="Signaling service" value={healthLabel(health)} state={health} />
             <StatusRow label="Room capacity" value="Two peers" />
             <StatusRow label="Connection path" value="WebRTC DataChannel" />
             <StatusRow label="Message validation" value="Enabled" />
+            <StatusRow label="Peer authentication" value="CPace PAKE (beta)" />
             <StatusRow label="Content stored on server" value="None" />
           </dl>
         </aside>
@@ -120,6 +122,8 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
   const state = usePeerRoom(roomId);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
+  const [secret, setSecret] = useState("");
+  const [secretError, setSecretError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const inviteUrl = `${window.location.origin}/r/${roomId}`;
 
@@ -142,6 +146,15 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
     }
     setDraft("");
     setSendError(null);
+  }
+
+  async function authenticate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSecretError(null);
+    const submittedSecret = secret;
+    setSecret("");
+    const result = await state.startAuthentication(submittedSecret);
+    if (!result.ok) setSecretError(result.error);
   }
 
   return (
@@ -210,6 +223,11 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                       : formatState(state.dataChannel)
                   }
                 />
+                <ConnectionRow
+                  label="Authentication"
+                  connected={state.authentication === "verified"}
+                  value={authenticationLabel(state.authentication)}
+                />
                 <ConnectionRow label="STUN" connected value="Cloudflare" />
               </dl>
               <button
@@ -221,6 +239,71 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
               </button>
             </aside>
           </div>
+
+          <section className="glass-card rounded-3xl p-6 sm:p-8" aria-label="Peer authentication">
+            <div className="grid items-end gap-6 md:grid-cols-[1fr_1.1fr]">
+              <div>
+                <p className="text-sm font-medium text-cyan-300">Peer authentication</p>
+                <h2 className="mt-2 text-2xl font-semibold">
+                  {authenticationHeading(state.authentication)}
+                </h2>
+                <p className="mt-3 max-w-xl text-sm leading-6 text-slate-400">
+                  Both people enter the same secret. A PAKE verifies the match without sending the
+                  secret through signaling or across the direct channel.
+                </p>
+              </div>
+
+              {state.authentication === "required" ? (
+                <form onSubmit={(event) => void authenticate(event)}>
+                  <label className="text-sm font-medium text-slate-300" htmlFor="shared-secret">
+                    Shared secret
+                  </label>
+                  <div className="mt-2 flex gap-3">
+                    <input
+                      autoComplete="new-password"
+                      className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/50"
+                      id="shared-secret"
+                      maxLength={SHARED_SECRET_MAX_LENGTH}
+                      minLength={SHARED_SECRET_MIN_LENGTH}
+                      onChange={(event) => {
+                        setSecret(event.target.value);
+                        setSecretError(null);
+                      }}
+                      placeholder="Enter the secret you agreed on"
+                      required
+                      type="password"
+                      value={secret}
+                    />
+                    <button
+                      className="rounded-2xl bg-cyan-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={secret.trim().length < SHARED_SECRET_MIN_LENGTH}
+                      type="submit"
+                    >
+                      Verify
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div
+                  className={`rounded-2xl border p-4 text-sm ${
+                    state.authentication === "verified"
+                      ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
+                      : state.authentication === "failed"
+                        ? "border-rose-400/25 bg-rose-400/10 text-rose-200"
+                        : "border-cyan-300/20 bg-cyan-300/8 text-cyan-100"
+                  }`}
+                  role="status"
+                >
+                  {authenticationDescription(state.authentication)}
+                </div>
+              )}
+            </div>
+            {secretError || state.authError ? (
+              <p className="mt-4 text-sm text-rose-300" role="alert">
+                {secretError ?? state.authError}
+              </p>
+            ) : null}
+          </section>
 
           <section className="glass-card overflow-hidden rounded-3xl" aria-label="Direct chat">
             <div className="border-b border-white/10 px-6 py-5 sm:px-8">
@@ -235,8 +318,8 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
             >
               {state.messages.length === 0 ? (
                 <li className="m-auto max-w-md text-center text-sm leading-6 text-slate-400">
-                  {state.dataChannel === "open"
-                    ? "You are connected. Send the first message."
+                  {state.authentication === "verified"
+                    ? "You are verified. Send the first message."
                     : "Chat unlocks when the control DataChannel opens."}
                 </li>
               ) : (
@@ -255,7 +338,7 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                 <input
                   autoComplete="off"
                   className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={state.dataChannel !== "open"}
+                  disabled={state.authentication !== "verified"}
                   id="chat-message"
                   maxLength={CHAT_MESSAGE_MAX_LENGTH}
                   onChange={(event) => {
@@ -267,7 +350,7 @@ function RoomPage({ roomId, onLeave }: { roomId: string; onLeave: () => void }) 
                 />
                 <button
                   className="rounded-2xl bg-cyan-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={state.dataChannel !== "open" || draft.trim().length === 0}
+                  disabled={state.authentication !== "verified" || draft.trim().length === 0}
                   type="submit"
                 >
                   Send
@@ -300,7 +383,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
             {PRODUCT_NAME}
           </a>
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300">
-            Phase 2
+            Phase 3
           </span>
         </header>
         {children}
@@ -426,4 +509,28 @@ function roomStatusDescription(phase: string): string {
 
 function formatState(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function authenticationLabel(authentication: string): string {
+  if (authentication === "verified") return "Secret verified";
+  if (authentication === "authenticating") return "Authenticating";
+  if (authentication === "failed") return "Secret mismatch";
+  if (authentication === "required") return "Secret required";
+  return "Waiting for peer";
+}
+
+function authenticationHeading(authentication: string): string {
+  if (authentication === "verified") return "Shared secret verified";
+  if (authentication === "authenticating") return "Authenticating…";
+  if (authentication === "failed") return "Secret mismatch";
+  if (authentication === "required") return "Enter shared secret";
+  return "Waiting for peer";
+}
+
+function authenticationDescription(authentication: string): string {
+  if (authentication === "verified") return "This peer proved they entered the same secret.";
+  if (authentication === "authenticating")
+    return "Waiting for both peers to complete verification.";
+  if (authentication === "failed") return "The secrets did not match. Start a new room to retry.";
+  return "Authentication becomes available after the direct connection opens.";
 }

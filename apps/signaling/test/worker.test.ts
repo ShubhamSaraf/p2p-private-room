@@ -88,6 +88,21 @@ describe("PeerLink signaling Worker", () => {
       message: "Invalid signaling message.",
     });
 
+    const rejectedPake = nextMessage(first);
+    first.send(
+      JSON.stringify({
+        type: "pake-share",
+        version: 1,
+        sessionId: "A".repeat(43),
+        share: "B".repeat(43),
+      }),
+    );
+    expect(await rejectedPake).toEqual({
+      type: "error",
+      code: "invalid-signal",
+      message: "Invalid signaling message.",
+    });
+
     const thirdResponse = await SELF.fetch(roomSocketUrl(roomId), {
       headers: { Upgrade: "websocket", Origin: appOrigin },
     });

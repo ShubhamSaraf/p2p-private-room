@@ -6,10 +6,12 @@ import {
   PeerRoomSession,
   type PeerRoomState,
   type SendChatResult,
+  type StartAuthenticationResult,
 } from "./PeerRoomSession";
 
 export type PeerRoomController = PeerRoomState & {
   sendChatMessage: (text: string) => SendChatResult;
+  startAuthentication: (secret: string) => Promise<StartAuthenticationResult>;
 };
 
 export function usePeerRoom(roomId: string): PeerRoomController {
@@ -39,5 +41,17 @@ export function usePeerRoom(roomId: string): PeerRoomController {
     );
   }, []);
 
-  return { ...state, sendChatMessage };
+  const startAuthentication = useCallback(
+    async (secret: string): Promise<StartAuthenticationResult> => {
+      return (
+        (await sessionRef.current?.startAuthentication(secret)) ?? {
+          ok: false,
+          error: "The room is not connected yet.",
+        }
+      );
+    },
+    [],
+  );
+
+  return { ...state, sendChatMessage, startAuthentication };
 }

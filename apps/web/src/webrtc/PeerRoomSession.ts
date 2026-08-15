@@ -1,24 +1,44 @@
 import {
+  AUTH_PROTOCOL_VERSION,
   CHAT_MESSAGE_MAX_LENGTH,
+  type AuthenticationMessage,
   type ChatMessage,
   type ClientSignalingMessage,
   type IceCandidateMessage,
   type PeerRole,
   type ServerSignalingMessage,
-  isChatMessage,
+  isControlMessage,
   isServerSignalingMessage,
 } from "@peerlink/protocol";
+import {
+  PAKE_CONFIRMATION_BYTES,
+  PAKE_SESSION_ID_BYTES,
+  PAKE_SHARE_BYTES,
+  destroyPakeResult,
+  destroyPakeState,
+  finishPake,
+  startPake,
+  validateSharedSecret,
+  verifyPakeConfirmation,
+  type PakeResult,
+  type PakeState,
+} from "@peerlink/crypto";
 
 const MAX_VISIBLE_CHAT_MESSAGES = 500;
 
 export type RoomPhase =
   "signaling" | "waiting" | "negotiating" | "connected" | "disconnected" | "error";
 
+export type AuthenticationPhase =
+  "waiting-for-peer" | "required" | "authenticating" | "verified" | "failed";
+
 export type PeerRoomState = {
   phase: RoomPhase;
   role: PeerRole | null;
   peerConnection: RTCPeerConnectionState;
   dataChannel: RTCDataChannelState | "none";
+  authentication: AuthenticationPhase;
+  authError: string | null;
   messages: ChatEntry[];
   chatError: string | null;
   error: string | null;
@@ -29,12 +49,15 @@ export type ChatEntry = ChatMessage & {
 };
 
 export type SendChatResult = { ok: true } | { ok: false; error: string };
+export type StartAuthenticationResult = { ok: true } | { ok: false; error: string };
 
 export const INITIAL_PEER_ROOM_STATE: PeerRoomState = {
   phase: "signaling",
   role: null,
   peerConnection: "new",
   dataChannel: "none",
+  authentication: "waiting-for-peer",
+  authError: null,
   messages: [],
   chatError: null,
   error: null,
@@ -57,8 +80,16 @@ export class PeerRoomSession {
   private role: PeerRole | null = null;
   private pendingCandidates: IceCandidateMessage[] = [];
   private messageQueue: Promise<void> = Promise.resolve();
+  private controlMessageQueue: Promise<void> = Promise.resolve();
   private makingOffer = false;
   private readonly seenChatMessageIds = new Set<string>();
+  private authenticationAttempted = false;
+  private pendingSecret: string | null = null;
+  private pendingPeerShare: Extract<AuthenticationMessage, { type: "pake-share" }> | null = null;
+  private pendingPeerConfirmation: Uint8Array | null = null;
+  private pakeState: PakeState | null = null;
+  private pakeResult: PakeResult | null = null;
+  private authSessionId: string | null = null;
   private disposed = false;
 
   constructor(options: SessionOptions) {
@@ -113,6 +144,9 @@ export class PeerRoomSession {
     if (!this.channel || this.channel.readyState !== "open") {
       return { ok: false, error: "Wait for the peer connection before sending." };
     }
+    if (this.state.authentication !== "verified") {
+      return { ok: false, error: "Verify the shared secret before sending messages." };
+    }
 
     const message: ChatMessage = {
       type: "chat",
@@ -128,6 +162,51 @@ export class PeerRoomSession {
       return { ok: true };
     } catch {
       return { ok: false, error: "The message could not be sent." };
+    }
+  }
+
+  async startAuthentication(secret: string): Promise<StartAuthenticationResult> {
+    const validationError = validateSharedSecret(secret);
+    if (validationError) return { ok: false, error: validationError };
+    if (!this.channel || this.channel.readyState !== "open" || !this.role) {
+      return { ok: false, error: "Wait for the peer connection before entering the secret." };
+    }
+    if (this.state.authentication === "verified") {
+      return { ok: false, error: "This peer is already verified." };
+    }
+    if (this.authenticationAttempted) {
+      return { ok: false, error: "Authentication was already attempted for this connection." };
+    }
+
+    this.authenticationAttempted = true;
+    this.update({ authentication: "authenticating", authError: null });
+
+    try {
+      if (this.role === "initiator") {
+        const sid = crypto.getRandomValues(new Uint8Array(PAKE_SESSION_ID_BYTES));
+        this.pakeState = startPake({
+          secret,
+          sid,
+          channelId: this.channelId(),
+          role: "initiator",
+        });
+        this.authSessionId = encodeBase64Url(sid);
+        this.sendControl({
+          type: "pake-share",
+          version: AUTH_PROTOCOL_VERSION,
+          sessionId: this.authSessionId,
+          share: encodeBase64Url(this.pakeState.ownShare),
+        });
+      } else if (this.pendingPeerShare) {
+        await this.finishResponderAuthentication(secret, this.pendingPeerShare);
+      } else {
+        this.pendingSecret = secret;
+      }
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Authentication failed.";
+      this.failAuthentication(message);
+      return { ok: false, error: message };
     }
   }
 
@@ -279,9 +358,22 @@ export class PeerRoomSession {
     this.update({ dataChannel: channel.readyState });
 
     channel.addEventListener("open", () => {
-      this.update({ phase: "connected", dataChannel: "open", error: null });
+      this.update({
+        phase: "connected",
+        dataChannel: "open",
+        authentication: "required",
+        authError: null,
+        error: null,
+      });
     });
-    channel.addEventListener("message", (event) => this.handleControlMessage(event.data));
+    channel.addEventListener("message", (event) => {
+      this.controlMessageQueue = this.controlMessageQueue
+        .then(() => this.handleControlMessage(event.data))
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : "Authentication failed.";
+          this.failAuthentication(message);
+        });
+    });
     channel.addEventListener("closing", () => this.update({ dataChannel: "closing" }));
     channel.addEventListener("close", () => {
       if (!this.disposed) this.update({ dataChannel: "closed" });
@@ -296,7 +388,7 @@ export class PeerRoomSession {
     this.socket.send(JSON.stringify(message));
   }
 
-  private handleControlMessage(rawData: unknown): void {
+  private async handleControlMessage(rawData: unknown): Promise<void> {
     if (typeof rawData !== "string") {
       this.update({ chatError: "The peer sent an unsupported control message." });
       return;
@@ -310,14 +402,136 @@ export class PeerRoomSession {
       return;
     }
 
-    if (!isChatMessage(value)) {
-      this.update({ chatError: "The peer sent an invalid chat message." });
+    if (!isControlMessage(value)) {
+      this.update({ chatError: "The peer sent an invalid control message." });
+      return;
+    }
+
+    if (value.type === "pake-share") {
+      await this.receivePakeShare(value);
+      return;
+    }
+    if (value.type === "pake-confirm") {
+      await this.receivePakeConfirmation(decodeBase64Url(value.confirmation));
+      return;
+    }
+    if (this.state.authentication !== "verified") {
+      this.update({ chatError: "The peer tried to send a message before authentication." });
       return;
     }
     if (this.seenChatMessageIds.has(value.id)) return;
 
     this.seenChatMessageIds.add(value.id);
     this.appendMessage({ ...value, direction: "incoming" });
+  }
+
+  private async receivePakeShare(
+    message: Extract<AuthenticationMessage, { type: "pake-share" }>,
+  ): Promise<void> {
+    if (!this.role) throw new Error("Received authentication data before joining the room.");
+
+    if (this.role === "responder") {
+      if (this.pendingPeerShare || this.pakeState || this.pakeResult) {
+        throw new Error("The peer sent a duplicate authentication share.");
+      }
+      this.pendingPeerShare = message;
+      if (this.pendingSecret) {
+        const secret = this.pendingSecret;
+        this.pendingSecret = null;
+        await this.finishResponderAuthentication(secret, message);
+      }
+      return;
+    }
+
+    if (!this.authenticationAttempted || !this.pakeState || !this.authSessionId) {
+      throw new Error("The peer started authentication out of order.");
+    }
+    if (message.sessionId !== this.authSessionId || this.pakeResult) {
+      throw new Error("The peer sent invalid authentication session data.");
+    }
+
+    await this.deriveAndConfirm(decodeFixed(message.share, PAKE_SHARE_BYTES, "PAKE share"));
+  }
+
+  private async finishResponderAuthentication(
+    secret: string,
+    message: Extract<AuthenticationMessage, { type: "pake-share" }>,
+  ): Promise<void> {
+    const sid = decodeFixed(message.sessionId, PAKE_SESSION_ID_BYTES, "PAKE session ID");
+    const peerShare = decodeFixed(message.share, PAKE_SHARE_BYTES, "PAKE share");
+    this.authSessionId = message.sessionId;
+    this.pakeState = startPake({
+      secret,
+      sid,
+      channelId: this.channelId(),
+      role: "responder",
+    });
+    this.sendControl({
+      type: "pake-share",
+      version: AUTH_PROTOCOL_VERSION,
+      sessionId: message.sessionId,
+      share: encodeBase64Url(this.pakeState.ownShare),
+    });
+    await this.deriveAndConfirm(peerShare);
+  }
+
+  private async deriveAndConfirm(peerShare: Uint8Array): Promise<void> {
+    if (!this.pakeState) throw new Error("Authentication state is missing.");
+    this.pakeResult = await finishPake({ state: this.pakeState, peerShare });
+    destroyPakeState(this.pakeState);
+    this.pakeState = null;
+    this.sendControl({
+      type: "pake-confirm",
+      version: AUTH_PROTOCOL_VERSION,
+      confirmation: encodeBase64Url(this.pakeResult.ownConfirmation),
+    });
+
+    if (this.pendingPeerConfirmation) {
+      const confirmation = this.pendingPeerConfirmation;
+      this.pendingPeerConfirmation = null;
+      await this.receivePakeConfirmation(confirmation);
+    }
+  }
+
+  private async receivePakeConfirmation(confirmation: Uint8Array): Promise<void> {
+    if (confirmation.length !== PAKE_CONFIRMATION_BYTES) {
+      throw new Error("The peer sent an invalid confirmation.");
+    }
+    if (!this.pakeResult) {
+      if (this.pendingPeerConfirmation) throw new Error("The peer sent duplicate confirmations.");
+      this.pendingPeerConfirmation = confirmation;
+      return;
+    }
+
+    const verified = await verifyPakeConfirmation(this.pakeResult, confirmation);
+    confirmation.fill(0);
+    if (!verified) {
+      this.failAuthentication("Shared secrets do not match. Start a new room to try again.");
+      return;
+    }
+    this.update({ authentication: "verified", authError: null, chatError: null });
+  }
+
+  private sendControl(message: AuthenticationMessage): void {
+    if (!this.channel || this.channel.readyState !== "open") {
+      throw new Error("The control DataChannel is not open.");
+    }
+    this.channel.send(JSON.stringify(message));
+  }
+
+  private channelId(): Uint8Array {
+    return new TextEncoder().encode(`peerlink/control/v1/room/${this.roomId}`);
+  }
+
+  private failAuthentication(message: string): void {
+    this.pendingSecret = null;
+    destroyPakeState(this.pakeState);
+    destroyPakeResult(this.pakeResult);
+    this.pakeState = null;
+    this.pakeResult = null;
+    this.pendingPeerConfirmation?.fill(0);
+    this.pendingPeerConfirmation = null;
+    this.update({ authentication: "failed", authError: message });
   }
 
   private appendMessage(message: ChatEntry): void {
@@ -328,6 +542,16 @@ export class PeerRoomSession {
   private resetPeerConnection(): void {
     this.pendingCandidates = [];
     this.seenChatMessageIds.clear();
+    this.authenticationAttempted = false;
+    this.pendingSecret = null;
+    this.pendingPeerShare = null;
+    this.pendingPeerConfirmation?.fill(0);
+    this.pendingPeerConfirmation = null;
+    destroyPakeState(this.pakeState);
+    destroyPakeResult(this.pakeResult);
+    this.pakeState = null;
+    this.pakeResult = null;
+    this.authSessionId = null;
     this.channel?.close();
     this.peer?.close();
     this.channel = null;
@@ -335,6 +559,8 @@ export class PeerRoomSession {
     this.update({
       peerConnection: "closed",
       dataChannel: "none",
+      authentication: "waiting-for-peer",
+      authError: null,
       messages: [],
       chatError: null,
     });
@@ -351,6 +577,25 @@ export class PeerRoomSession {
     this.state = { ...this.state, ...patch };
     this.onStateChange(this.state);
   }
+}
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
+}
+
+function decodeBase64Url(value: string): Uint8Array {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function decodeFixed(value: string, length: number, label: string): Uint8Array {
+  const decoded = decodeBase64Url(value);
+  if (decoded.length !== length) throw new Error(`${label} must be ${length} bytes.`);
+  return decoded;
 }
 
 function createSocketUrl(signalingUrl: string, roomId: string): string {

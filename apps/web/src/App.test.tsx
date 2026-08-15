@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 
-const { sendChatMessage } = vi.hoisted(() => ({
+const { roomOverrides, sendChatMessage, startAuthentication } = vi.hoisted(() => ({
+  roomOverrides: {} as Record<string, unknown>,
   sendChatMessage: vi.fn(() => ({ ok: true as const })),
+  startAuthentication: vi.fn(async () => ({ ok: true as const })),
 }));
 
 vi.mock("./webrtc/usePeerRoom", () => ({
@@ -13,6 +15,8 @@ vi.mock("./webrtc/usePeerRoom", () => ({
     role: "initiator",
     peerConnection: "connected",
     dataChannel: "open",
+    authentication: "verified",
+    authError: null,
     messages: [
       {
         type: "chat",
@@ -25,6 +29,8 @@ vi.mock("./webrtc/usePeerRoom", () => ({
     chatError: null,
     error: null,
     sendChatMessage,
+    startAuthentication,
+    ...roomOverrides,
   }),
 }));
 
@@ -33,6 +39,8 @@ const roomId = "A7_k92LmPq4VX8nBz0RtUvWxY1234567";
 beforeEach(() => {
   window.history.replaceState(null, "", "/");
   sendChatMessage.mockClear();
+  startAuthentication.mockClear();
+  for (const key of Object.keys(roomOverrides)) delete roomOverrides[key];
 });
 
 afterEach(() => {
@@ -87,5 +95,21 @@ describe("App", () => {
 
     expect(sendChatMessage).toHaveBeenCalledWith("Hello there");
     expect(screen.getByLabelText("Message")).toHaveValue("");
+  });
+
+  it("submits and clears the shared secret before chat is unlocked", async () => {
+    Object.assign(roomOverrides, { authentication: "required", messages: [] });
+    window.history.replaceState(null, "", `/r/${roomId}`);
+    render(<App />);
+
+    const input = screen.getByLabelText("Shared secret");
+    fireEvent.change(input, { target: { value: "correct horse battery staple" } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    await waitFor(() =>
+      expect(startAuthentication).toHaveBeenCalledWith("correct horse battery staple"),
+    );
+    expect(input).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });

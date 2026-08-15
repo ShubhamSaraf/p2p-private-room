@@ -2,6 +2,7 @@ export const PRODUCT_NAME = "PeerLink" as const;
 export const SIGNALING_PROTOCOL_VERSION = 1 as const;
 export const ROOM_ID_LENGTH = 32 as const;
 export const CHAT_MESSAGE_MAX_LENGTH = 2_000 as const;
+export const AUTH_PROTOCOL_VERSION = 1 as const;
 
 export type PeerRole = "initiator" | "responder";
 
@@ -26,6 +27,22 @@ export type ChatMessage = {
   timestamp: number;
   text: string;
 };
+
+export type PakeShareMessage = {
+  type: "pake-share";
+  version: typeof AUTH_PROTOCOL_VERSION;
+  sessionId: string;
+  share: string;
+};
+
+export type PakeConfirmationMessage = {
+  type: "pake-confirm";
+  version: typeof AUTH_PROTOCOL_VERSION;
+  confirmation: string;
+};
+
+export type AuthenticationMessage = PakeShareMessage | PakeConfirmationMessage;
+export type ControlMessage = ChatMessage | AuthenticationMessage;
 
 export type ServerSignalingMessage =
   | { type: "room-joined"; role: PeerRole; peerCount: 1 | 2 }
@@ -85,6 +102,24 @@ export function isChatMessage(value: unknown): value is ChatMessage {
   );
 }
 
+export function isAuthenticationMessage(value: unknown): value is AuthenticationMessage {
+  if (!isRecord(value) || value.version !== AUTH_PROTOCOL_VERSION) return false;
+
+  if (value.type === "pake-share") {
+    return isBase64Url(value.sessionId, 43) && isBase64Url(value.share, 43);
+  }
+
+  if (value.type === "pake-confirm") {
+    return isBase64Url(value.confirmation, 86);
+  }
+
+  return false;
+}
+
+export function isControlMessage(value: unknown): value is ControlMessage {
+  return isChatMessage(value) || isAuthenticationMessage(value);
+}
+
 export function isServerSignalingMessage(value: unknown): value is ServerSignalingMessage {
   if (isClientSignalingMessage(value)) return true;
   if (!isRecord(value) || typeof value.type !== "string") return false;
@@ -119,4 +154,8 @@ function isNullableInteger(value: unknown): value is number | null {
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isBase64Url(value: unknown, length: number): value is string {
+  return typeof value === "string" && value.length === length && /^[A-Za-z0-9_-]+$/.test(value);
 }
